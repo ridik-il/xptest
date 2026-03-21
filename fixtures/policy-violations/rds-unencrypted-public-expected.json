@@ -1,0 +1,4 @@
+[
+  {"layer": 3, "rule": "enc/rds-encrypted", "severity": "CRITICAL"},
+  {"layer": 3, "rule": "net/rds-not-public", "severity": "CRITICAL"}
+]

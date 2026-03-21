@@ -1,0 +1,43 @@
+# Dependency error fixture: S3 bucket and IAM role in a mutual dependency cycle.
+# Bucket depends on Role's atProvider, Role depends on Bucket's atProvider.
+# Expected: L2-02/dependency-cycle CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: s3-cycle
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: data-bucket
+      base:
+        apiVersion: s3.aws.crossplane.io/v1beta1
+        kind: Bucket
+        spec:
+          forProvider:
+            region: eu-west-1
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.bucket-role.roleId
+          toFieldPath: spec.forProvider.roleName
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.arn
+
+    - name: bucket-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"s3.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.data-bucket.arn
+          toFieldPath: spec.forProvider.tags.BucketArn
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.roleId

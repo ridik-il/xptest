@@ -1,0 +1,29 @@
+# Dependency error fixture: RDS DBInstance references a non-existent subnet resource.
+# Expected: L2-03/dangling-reference CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: rds-dangling-subnet
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: main-db
+      base:
+        apiVersion: rds.aws.crossplane.io/v1beta1
+        kind: DBInstance
+        spec:
+          forProvider:
+            dbInstanceClass: db.t3.micro
+            engine: postgres
+            region: eu-west-1
+            storageEncrypted: true
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.nonexistent-subnet.subnetId
+          toFieldPath: spec.forProvider.dbSubnetGroupName
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.dbInstanceArn

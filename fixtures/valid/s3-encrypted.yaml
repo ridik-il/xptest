@@ -1,0 +1,44 @@
+# Valid S3 composition: encrypted bucket with public access block.
+# Expected: no findings.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: s3-encrypted-valid
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: data-bucket
+      base:
+        apiVersion: s3.aws.crossplane.io/v1beta1
+        kind: Bucket
+        spec:
+          forProvider:
+            region: eu-west-1
+            serverSideEncryptionConfiguration:
+              rules:
+                - applyServerSideEncryptionByDefault:
+                    sseAlgorithm: aws:kms
+                    kmsMasterKeyId: "arn:aws:kms:eu-west-1:123456789012:key/example-key"
+            publicAccessBlockConfiguration:
+              blockPublicAcls: true
+              blockPublicPolicy: true
+              ignorePublicAcls: true
+              restrictPublicBuckets: true
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.arn
+
+    - name: bucket-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"s3.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.roleId

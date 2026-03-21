@@ -1,0 +1,4 @@
+[
+  {"layer": 3, "rule": "enc/s3-sse", "severity": "CRITICAL"},
+  {"layer": 3, "rule": "net/s3-public-block", "severity": "CRITICAL"}
+]

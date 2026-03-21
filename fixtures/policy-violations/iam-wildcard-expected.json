@@ -1,0 +1,4 @@
+[
+  {"layer": 3, "rule": "iam/no-wildcard-action", "severity": "CRITICAL"},
+  {"layer": 3, "rule": "iam/no-wildcard-resource", "severity": "CRITICAL"}
+]

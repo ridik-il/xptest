@@ -1,0 +1,75 @@
+# Valid RDS composition: encrypted, private, with proper SG and IAM trust.
+# Expected: no findings.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: rds-secure-valid
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: db-subnet
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            cidrBlock: "10.0.10.0/24"
+            region: eu-west-1
+            availabilityZone: eu-west-1a
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.subnetId
+
+    - name: db-sg
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: SecurityGroup
+        spec:
+          forProvider:
+            region: eu-west-1
+            description: "RDS security group"
+            ingress:
+              - fromPort: 5432
+                toPort: 5432
+                ipProtocol: tcp
+                ipRanges:
+                  - cidrIp: "10.0.0.0/16"
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.securityGroupID
+
+    - name: db-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"rds.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.roleId
+
+    - name: main-db
+      base:
+        apiVersion: rds.aws.crossplane.io/v1beta1
+        kind: DBInstance
+        spec:
+          forProvider:
+            dbInstanceClass: db.t3.micro
+            engine: postgres
+            region: eu-west-1
+            storageEncrypted: true
+            publiclyAccessible: false
+            vpcSecurityGroupIdRefs:
+              - name: db-sg
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.db-subnet.subnetId
+          toFieldPath: spec.forProvider.dbSubnetGroupName
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.dbInstanceArn

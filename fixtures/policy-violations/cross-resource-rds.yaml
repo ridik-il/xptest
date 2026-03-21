@@ -1,0 +1,51 @@
+# Policy violation fixture: cross-resource checks — IAM-RDS trust and SG-RDS port mismatch.
+# Role trusts ec2.amazonaws.com but coexists with RDS DBInstance (expects rds.amazonaws.com).
+# SG allows port 22 but RDS engine is postgres (expects port 5432).
+# Expected: cross/iam-rds-trust CRITICAL, cross/sg-rds-port-match CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: cross-resource-rds-violations
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: db-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+
+    - name: db-sg
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: SecurityGroup
+        spec:
+          forProvider:
+            region: eu-west-1
+            description: "DB security group"
+            ingress:
+              - fromPort: 22
+                toPort: 22
+                ipProtocol: tcp
+                ipRanges:
+                  - cidrIp: "10.0.0.0/16"
+
+    - name: main-db
+      base:
+        apiVersion: rds.aws.crossplane.io/v1beta1
+        kind: DBInstance
+        spec:
+          forProvider:
+            dbInstanceClass: db.t3.micro
+            engine: postgres
+            region: eu-west-1
+            storageEncrypted: true
+            publiclyAccessible: false
+            vpcSecurityGroupIdRefs:
+              - name: db-sg

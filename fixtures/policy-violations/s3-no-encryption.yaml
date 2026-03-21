@@ -1,0 +1,19 @@
+# Policy violation fixture: S3 bucket without encryption and without public access block.
+# Expected: enc/s3-sse CRITICAL, net/s3-public-block CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: s3-no-encryption
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: bad-bucket
+      base:
+        apiVersion: s3.aws.crossplane.io/v1beta1
+        kind: Bucket
+        spec:
+          forProvider:
+            region: eu-west-1

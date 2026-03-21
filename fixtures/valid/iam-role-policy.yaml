@@ -1,0 +1,39 @@
+# Valid IAM composition: Role with least-privilege trust + scoped Policy.
+# Expected: no findings.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: iam-role-policy-valid
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: app-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.roleId
+
+    - name: app-policy
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Policy
+        spec:
+          forProvider:
+            policy: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::my-bucket/*"}]}
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.app-role.roleId
+          toFieldPath: spec.forProvider.roleName
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.policyArn

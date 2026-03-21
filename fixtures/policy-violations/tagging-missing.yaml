@@ -1,0 +1,22 @@
+# Policy violation fixture: resource with tags but missing mandatory keys.
+# Expected: tag/mandatory-keys WARNING (when mandatory_tag_keys includes "Environment" and "Owner").
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tagging-missing
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: tagged-vpc
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: VPC
+        spec:
+          forProvider:
+            cidrBlock: "10.0.0.0/16"
+            region: eu-west-1
+            tags:
+              Project: my-project

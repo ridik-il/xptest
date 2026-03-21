@@ -1,0 +1,31 @@
+# Policy violation fixture: Security group with open SSH and open DB ports.
+# Expected: net/sg-no-open-ssh CRITICAL, net/sg-no-open-db CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: sg-policy-violations
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: bad-sg
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: SecurityGroup
+        spec:
+          forProvider:
+            region: eu-west-1
+            description: "insecure SG"
+            ingress:
+              - fromPort: 22
+                toPort: 22
+                ipProtocol: tcp
+                ipRanges:
+                  - cidrIp: "0.0.0.0/0"
+              - fromPort: 5432
+                toPort: 5432
+                ipProtocol: tcp
+                ipRanges:
+                  - cidrIp: "0.0.0.0/0"

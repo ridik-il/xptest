@@ -1,0 +1,23 @@
+# Policy violation fixture: RDS instance without encryption and publicly accessible.
+# Expected: enc/rds-encrypted CRITICAL, net/rds-not-public CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: rds-policy-violations
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: bad-db
+      base:
+        apiVersion: rds.aws.crossplane.io/v1beta1
+        kind: DBInstance
+        spec:
+          forProvider:
+            dbInstanceClass: db.t3.micro
+            engine: postgres
+            region: eu-west-1
+            storageEncrypted: false
+            publiclyAccessible: true

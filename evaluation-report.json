@@ -1,0 +1,182 @@
+{
+  "summary": {
+    "2": {
+      "layer": 2,
+      "tp": 6,
+      "fp": 0,
+      "fn": 0,
+      "severity_mismatches": 0,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fpr": 0.0
+    },
+    "3": {
+      "layer": 3,
+      "tp": 0,
+      "fp": 0,
+      "fn": 11,
+      "severity_mismatches": 0,
+      "recall": 0.0,
+      "precision": 1.0,
+      "fpr": 0.0
+    }
+  },
+  "fixtures": [
+    {
+      "fixture": "cross-resource-rds",
+      "expected": 2,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "details": [
+        "2 expected finding(s) not detected"
+      ]
+    },
+    {
+      "fixture": "iam-missing-readiness",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "iam-role-policy",
+      "expected": 0,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "iam-wildcard",
+      "expected": 2,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "details": [
+        "2 expected finding(s) not detected"
+      ]
+    },
+    {
+      "fixture": "rds-dangling-subnet",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "rds-secure",
+      "expected": 0,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "rds-unencrypted-public",
+      "expected": 2,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "details": [
+        "2 expected finding(s) not detected"
+      ]
+    },
+    {
+      "fixture": "s3-cycle",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "s3-encrypted",
+      "expected": 0,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "s3-no-encryption",
+      "expected": 2,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "details": [
+        "2 expected finding(s) not detected"
+      ]
+    },
+    {
+      "fixture": "sg-open-ssh-db",
+      "expected": 2,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "details": [
+        "2 expected finding(s) not detected"
+      ]
+    },
+    {
+      "fixture": "tagging-missing",
+      "expected": 1,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "details": [
+        "1 expected finding(s) not detected"
+      ]
+    },
+    {
+      "fixture": "vpc-cycle",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "vpc-dangling",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "vpc-missing-readiness",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "vpc-subnet-iam",
+      "expected": 0,
+      "actual": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    }
+  ]
+}

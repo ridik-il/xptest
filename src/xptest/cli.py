@@ -14,9 +14,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from xptest.config import load_config
+from xptest.config import ConfigError, load_config
 from xptest.layer1 import static as layer1
 from xptest.layer2 import dependency as layer2
+from xptest.layer3 import policy as layer3
 from xptest.layer4 import reporting as layer4
 from xptest.loader import LoadError, load
 from xptest.models import Severity
@@ -66,7 +67,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"xptest: config error — {exc}\n")
+        return 1
 
     try:
         obj = load(
@@ -78,9 +83,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         sys.stderr.write(f"xptest: load error — {exc}\n")
         return 1
 
-    all_findings = []
+    all_findings: list = []
 
-    # Layer 1
+    # Layer 1 — Static Validation
     l1_findings = layer1.run(obj)
     all_findings.extend(l1_findings)
 
@@ -89,9 +94,23 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         sys.stderr.write("xptest: CRITICAL finding(s) in Layer 1 — halting pipeline.\n")
         return layer4.write(all_findings, output_path=args.output)
 
-    # Layer 2
+    # Layer 2 — Dependency Validation
     l2_findings = layer2.run(obj)
     all_findings.extend(l2_findings)
+
+    has_critical = any(f.severity == Severity.CRITICAL for f in l2_findings)
+    if has_critical and args.halt_on_critical:
+        sys.stderr.write("xptest: CRITICAL finding(s) in Layer 2 — halting pipeline.\n")
+        return layer4.write(all_findings, output_path=args.output)
+
+    # Layer 3 — Policy Compliance (OPA Rego)
+    try:
+        l3_findings = layer3.run(obj, cfg)
+        all_findings.extend(l3_findings)
+    except layer3.OpaError as exc:
+        sys.stderr.write(f"xptest: OPA error — {exc}\n")
+        # Layer 3 failure does not block reporting of L1+L2 findings
+        pass
 
     return layer4.write(all_findings, output_path=args.output)
 

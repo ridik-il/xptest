@@ -1,0 +1,33 @@
+# Dependency error fixture: IAM Policy depends on Role's atProvider, but Role has no readinessChecks.
+# Expected: L2-04/missing-readiness-gate WARNING.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: iam-missing-readiness
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: app-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+
+    - name: app-policy
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Policy
+        spec:
+          forProvider:
+            policy: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::my-bucket/*"}]}
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.app-role.roleId
+          toFieldPath: spec.forProvider.roleName

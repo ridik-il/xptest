@@ -1,0 +1,3 @@
+[
+  {"layer": 2, "rule": "L2-02/dependency-cycle", "severity": "CRITICAL"}
+]

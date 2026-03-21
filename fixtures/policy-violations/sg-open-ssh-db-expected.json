@@ -1,0 +1,4 @@
+[
+  {"layer": 3, "rule": "net/sg-no-open-ssh", "severity": "CRITICAL"},
+  {"layer": 3, "rule": "net/sg-no-open-db", "severity": "CRITICAL"}
+]
