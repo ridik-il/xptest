@@ -1,0 +1,51 @@
+# Minimal CRD stub for IAM Role — for framework testing only.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: roles.iam.aws.crossplane.io
+spec:
+  group: iam.aws.crossplane.io
+  names:
+    kind: Role
+    listKind: RoleList
+    plural: roles
+    singular: role
+  scope: Cluster
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [forProvider]
+              properties:
+                forProvider:
+                  type: object
+                  required: [assumeRolePolicyDocument]
+                  properties:
+                    assumeRolePolicyDocument:
+                      type: string
+                    description:
+                      type: string
+                    path:
+                      type: string
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+            status:
+              type: object
+              properties:
+                atProvider:
+                  type: object
+                  properties:
+                    roleId:
+                      type: string
+                    arn:
+                      type: string
+                    createDate:
+                      type: string

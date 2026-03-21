@@ -1,0 +1,28 @@
+# Dangling reference: main-subnet reads from a resource 'nonexistent-vpc' not in composition.
+# Expected: L2-03/dangling-reference CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: vpc-dangling
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: main-subnet
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            cidrBlock: "10.0.1.0/24"
+            region: "eu-west-1"
+      patches:
+        # References 'nonexistent-vpc' which does not exist in this composition.
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.nonexistent-vpc.vpcId
+          toFieldPath: spec.forProvider.vpcId
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.subnetId

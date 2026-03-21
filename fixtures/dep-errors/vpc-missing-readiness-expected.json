@@ -1,0 +1,7 @@
+[
+  {
+    "layer": 2,
+    "rule": "L2-04/missing-readiness-gate",
+    "severity": "WARNING"
+  }
+]

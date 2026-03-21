@@ -1,0 +1,42 @@
+# Missing readiness gate: main-vpc is a dependency producer but has no readinessChecks.
+# main-subnet depends on main-vpc's atProvider.vpcId.
+# Expected: L2-04/missing-readiness-gate WARNING.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: vpc-missing-readiness
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: main-vpc
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: VPC
+        spec:
+          forProvider:
+            cidrBlock: "10.0.0.0/16"
+            region: "eu-west-1"
+      patches:
+        - type: ToCompositeFieldPath
+          fromFieldPath: status.atProvider.vpcId
+          toFieldPath: status.atProvider.vpc.vpcId
+      # No readinessChecks — this is the defect being tested.
+
+    - name: main-subnet
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            cidrBlock: "10.0.1.0/24"
+            region: "eu-west-1"
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.main-vpc.vpcId
+          toFieldPath: spec.forProvider.vpcId
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.subnetId

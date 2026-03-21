@@ -1,0 +1,61 @@
+# Valid three-resource Composition: VPC + Subnet (depends on VPC) + IAM Role.
+# Expected: no findings.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: vpc-subnet-iam-valid
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: main-vpc
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: VPC
+        spec:
+          forProvider:
+            cidrBlock: "10.0.0.0/16"
+            region: "eu-west-1"
+            enableDnsSupport: true
+            enableDnsHostnames: true
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.cidrBlock
+          toFieldPath: spec.forProvider.cidrBlock
+        - type: ToCompositeFieldPath
+          fromFieldPath: status.atProvider.vpcId
+          toFieldPath: status.atProvider.main-vpc.vpcId
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.vpcId
+
+    - name: main-subnet
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            cidrBlock: "10.0.1.0/24"
+            region: "eu-west-1"
+            availabilityZone: "eu-west-1a"
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.main-vpc.vpcId
+          toFieldPath: spec.forProvider.vpcId
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.subnetId
+
+    - name: vpc-role
+      base:
+        apiVersion: iam.aws.crossplane.io/v1beta1
+        kind: Role
+        spec:
+          forProvider:
+            assumeRolePolicyDocument: |
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.roleId

@@ -1,0 +1,45 @@
+# Dependency cycle: main-vpc depends on main-subnet, main-subnet depends on main-vpc.
+# Expected: L2-02/dependency-cycle CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: vpc-cycle
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: main-vpc
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: VPC
+        spec:
+          forProvider:
+            cidrBlock: "10.0.0.0/16"
+            region: "eu-west-1"
+      patches:
+        # main-vpc reads from status.atProvider.main-subnet.subnetId → creates edge subnet→vpc
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.main-subnet.subnetId
+          toFieldPath: spec.forProvider.someField
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.vpcId
+
+    - name: main-subnet
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            cidrBlock: "10.0.1.0/24"
+            region: "eu-west-1"
+      patches:
+        # main-subnet reads from status.atProvider.main-vpc.vpcId → creates edge vpc→subnet
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.main-vpc.vpcId
+          toFieldPath: spec.forProvider.vpcId
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.subnetId

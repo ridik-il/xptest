@@ -1,0 +1,277 @@
+"""Layer 1 — Static Validation.
+
+Checks performed (no AWS credentials, no live cluster required):
+  L1-01  Schema validation of each composed resource against the local CRD bundle.
+  L1-02  Patch field path syntax check (fromFieldPath / toFieldPath must be non-empty strings).
+  L1-03  Duplicate composed resource name detection.
+  L1-04  Provider lock constraint (apiVersion / kind must exist in the CRD bundle).
+  L1-05  Deprecated field detection (stub — extended per provider bundle).
+
+Execution target: < 5 seconds for typical compositions.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from xptest.models import ComposedResource, CompositionObject, Finding, Severity
+
+# A valid Kubernetes/Crossplane field path: dot-separated identifiers.
+# Segments may contain hyphens (common in resource names, e.g. "main-vpc").
+# Optionally includes array indices e.g. "spec.forProvider.subnets[0].id"
+_FIELD_PATH_RE = re.compile(
+    r"^[a-zA-Z_][a-zA-Z0-9_-]*(\[\d+\])?(\.[a-zA-Z_][a-zA-Z0-9_-]*(\[\d+\])?)*$"
+)
+
+# Patch types that carry fromFieldPath / toFieldPath values.
+_PATCHTYPES_WITH_PATHS = {
+    "FromCompositeFieldPath",
+    "ToCompositeFieldPath",
+    "CombineFromComposite",
+    "FromEnvironmentFieldPath",
+}
+
+
+def run(obj: CompositionObject) -> list[Finding]:
+    """Execute all Layer 1 checks and return findings."""
+    findings: list[Finding] = []
+    findings.extend(_check_duplicate_names(obj))
+    findings.extend(_check_provider_lock(obj))
+    findings.extend(_check_patch_field_paths(obj))
+    if obj.crd_bundle_path:
+        findings.extend(_check_schema(obj))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# L1-03 — Duplicate composed resource names
+# ---------------------------------------------------------------------------
+
+
+def _check_duplicate_names(obj: CompositionObject) -> list[Finding]:
+    findings: list[Finding] = []
+    seen: set[str] = set()
+    for res in obj.resources:
+        if res.name in seen:
+            findings.append(
+                Finding(
+                    layer=1,
+                    rule="L1-03/duplicate-resource-name",
+                    resource=res.name,
+                    path="spec.resources[].name",
+                    severity=Severity.CRITICAL,
+                    message=f"Duplicate composed resource name '{res.name}'. "
+                    "Each composed resource must have a unique name within the Composition.",
+                    remediation="Rename one of the conflicting composed resources.",
+                )
+            )
+        seen.add(res.name)
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# L1-04 — Provider lock: apiVersion + kind must be known in the CRD bundle
+# ---------------------------------------------------------------------------
+
+
+def _check_provider_lock(obj: CompositionObject) -> list[Finding]:
+    if not obj.crd_bundle_path:
+        return []
+
+    known = _load_known_kinds(obj.crd_bundle_path)
+    findings: list[Finding] = []
+    for res in obj.resources:
+        key = (res.api_version, res.kind)
+        if res.api_version and res.kind and key not in known:
+            findings.append(
+                Finding(
+                    layer=1,
+                    rule="L1-04/unknown-provider-kind",
+                    resource=res.name,
+                    path="base.apiVersion/base.kind",
+                    severity=Severity.WARNING,
+                    message=(
+                        f"'{res.api_version}/{res.kind}' is not present in the CRD bundle "
+                        f"at '{obj.crd_bundle_path}'. "
+                        "The bundle may be incomplete or the provider version may differ."
+                    ),
+                    remediation=(
+                        "Verify that the CRD bundle path in xptest.yaml matches the "
+                        "provider version used in your Composition."
+                    ),
+                )
+            )
+    return findings
+
+
+def _load_known_kinds(bundle_path: str) -> set[tuple[str, str]]:
+    """Return a set of (apiVersion, kind) tuples from all CRD files in the bundle."""
+    known: set[tuple[str, str]] = set()
+    bundle = Path(bundle_path)
+    if not bundle.is_dir():
+        return known
+    for crd_file in bundle.rglob("*.yaml"):
+        try:
+            with crd_file.open() as fh:
+                doc = yaml.safe_load(fh)
+            if not isinstance(doc, dict) or doc.get("kind") != "CustomResourceDefinition":
+                continue
+            spec = doc.get("spec", {})
+            group: str = spec.get("group", "")
+            names: dict[str, Any] = spec.get("names", {})
+            kind: str = names.get("kind", "")
+            versions: list[dict[str, Any]] = spec.get("versions", [])
+            for v in versions:
+                v_name: str = v.get("name", "")
+                if group and kind and v_name:
+                    known.add((f"{group}/{v_name}", kind))
+        except Exception:  # noqa: BLE001
+            continue
+    return known
+
+
+# ---------------------------------------------------------------------------
+# L1-02 — Patch field path syntax
+# ---------------------------------------------------------------------------
+
+
+def _check_patch_field_paths(obj: CompositionObject) -> list[Finding]:
+    findings: list[Finding] = []
+    for res in obj.resources:
+        for patch in res.patches:
+            patch_type: str = patch.get("type", "FromCompositeFieldPath")
+            if patch_type not in _PATCHTYPES_WITH_PATHS:
+                continue
+            for path_key in ("fromFieldPath", "toFieldPath"):
+                val = patch.get(path_key)
+                if val is None:
+                    continue
+                if not isinstance(val, str) or not val.strip():
+                    findings.append(
+                        Finding(
+                            layer=1,
+                            rule="L1-02/invalid-field-path",
+                            resource=res.name,
+                            path=f"patches[type={patch_type}].{path_key}",
+                            severity=Severity.CRITICAL,
+                            message=(
+                                f"Patch '{path_key}' in resource '{res.name}' is empty or "
+                                "not a string. Every patch field path must be a non-empty "
+                                "dot-separated identifier."
+                            ),
+                            remediation=f"Set a valid dot-path value for '{path_key}'.",
+                        )
+                    )
+                elif not _FIELD_PATH_RE.match(val):
+                    findings.append(
+                        Finding(
+                            layer=1,
+                            rule="L1-02/invalid-field-path",
+                            resource=res.name,
+                            path=f"patches[type={patch_type}].{path_key}",
+                            severity=Severity.WARNING,
+                            message=(
+                                f"Patch '{path_key}' value '{val}' in resource '{res.name}' "
+                                "does not match the expected dot-separated identifier format."
+                            ),
+                            remediation=(
+                                "Use a dot-separated field path such as 'spec.forProvider.vpcId'."
+                            ),
+                        )
+                    )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# L1-01 — Schema validation against CRD bundle
+# ---------------------------------------------------------------------------
+
+
+def _check_schema(obj: CompositionObject) -> list[Finding]:
+    """Validate each composed resource's spec against its CRD schema."""
+    try:
+        import jsonschema  # noqa: PLC0415
+    except ImportError:
+        return []  # jsonschema not installed; skip silently
+
+    bundle = Path(obj.crd_bundle_path)
+    if not bundle.is_dir():
+        return []
+
+    crd_map = _build_crd_map(bundle)
+    findings: list[Finding] = []
+
+    for res in obj.resources:
+        schema = _resolve_schema(crd_map, res)
+        if schema is None:
+            continue
+        instance = {"spec": res.spec}
+        try:
+            jsonschema.validate(instance=instance, schema=schema)
+        except jsonschema.ValidationError as exc:
+            path_str = ".".join(str(p) for p in exc.absolute_path) or "spec"
+            findings.append(
+                Finding(
+                    layer=1,
+                    rule="L1-01/schema-violation",
+                    resource=res.name,
+                    path=path_str,
+                    severity=Severity.CRITICAL,
+                    message=(
+                        f"Schema validation failed for '{res.name}' "
+                        f"({res.api_version}/{res.kind}): {exc.message}"
+                    ),
+                    remediation=(
+                        "Review the field against the CRD schema for "
+                        f"'{res.kind}' in the CRD bundle."
+                    ),
+                )
+            )
+        except jsonschema.SchemaError:
+            pass  # malformed CRD schema; skip this resource
+
+    return findings
+
+
+def _build_crd_map(
+    bundle: Path,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Return a map of (apiVersion, kind) -> openAPIV3Schema for validation."""
+    crd_map: dict[tuple[str, str], dict[str, Any]] = {}
+    for crd_file in bundle.rglob("*.yaml"):
+        try:
+            with crd_file.open() as fh:
+                doc = yaml.safe_load(fh)
+            if not isinstance(doc, dict) or doc.get("kind") != "CustomResourceDefinition":
+                continue
+            spec = doc.get("spec", {})
+            group: str = spec.get("group", "")
+            kind: str = spec.get("names", {}).get("kind", "")
+            for v in spec.get("versions", []):
+                v_name: str = v.get("name", "")
+                schema_block = v.get("schema", {}).get("openAPIV3Schema", {})
+                if group and kind and v_name and schema_block:
+                    crd_map[(f"{group}/{v_name}", kind)] = schema_block
+        except Exception:  # noqa: BLE001
+            continue
+    return crd_map
+
+
+def _resolve_schema(
+    crd_map: dict[tuple[str, str], dict[str, Any]],
+    res: ComposedResource,
+) -> dict[str, Any] | None:
+    """Return the openAPIV3Schema for this resource, or None if not found."""
+    key = (res.api_version, res.kind)
+    schema = crd_map.get(key)
+    if schema is None:
+        return None
+    # Return only the spec sub-schema wrapped so jsonschema can validate {"spec": ...}
+    spec_schema = schema.get("properties", {}).get("spec")
+    if spec_schema is None:
+        return None
+    return {"type": "object", "properties": {"spec": spec_schema}}

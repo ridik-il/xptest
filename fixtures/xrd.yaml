@@ -1,0 +1,31 @@
+# Shared XRD used by all fixtures in this directory.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xvpcnetworks.aws.example.org
+spec:
+  group: aws.example.org
+  names:
+    kind: XVPCNetwork
+    plural: xvpcnetworks
+  claimNames:
+    kind: VPCNetwork
+    plural: vpcnetworks
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  properties:
+                    region:
+                      type: string
+                    cidrBlock:
+                      type: string
