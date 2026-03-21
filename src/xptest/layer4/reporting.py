@@ -36,6 +36,26 @@ def write(
     return 1 if any(f.severity == Severity.CRITICAL for f in findings) else 0
 
 
+def write_extended(
+    findings: list[Finding],
+    output_path: str,
+    extra_sections: dict,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    payload = {
+        "findings": [{**asdict(f), "severity": f.severity.value} for f in findings],
+        "sections": extra_sections,
+    }
+    Path(output_path).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    _print_summary(findings, stdout, stderr)
+    _print_extended_summary(extra_sections, stdout, stderr)
+    return 1 if any(f.severity == Severity.CRITICAL for f in findings) else 0
+
+
 def _write_json(findings: list[Finding], output_path: str) -> None:
     serializable = [{**asdict(f), "severity": f.severity.value} for f in findings]
     Path(output_path).write_text(
@@ -73,3 +93,35 @@ def _print_summary(
         out.write(f"  Message    : {f.message}\n")
         out.write(f"  Remediation: {f.remediation}\n")
         out.write("\n")
+
+
+def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO) -> None:
+    out = stderr if extra_sections.get("critical_count", 0) else stdout
+    logic = extra_sections.get("logic", {})
+    if logic:
+        out.write("xptest: logic testing summary\n")
+        coverage = logic.get("coverage", {})
+        line = (
+            "  cases={cases} unique_graphs={graphs} "
+            "unique_presence={presence} unique_fields={fields}\n"
+        )
+        out.write(
+            line.format(
+                cases=coverage.get("total_cases", 0),
+                graphs=coverage.get("unique_graphs", 0),
+                presence=coverage.get("unique_presence_signatures", 0),
+                fields=coverage.get("unique_field_signatures", 0),
+            )
+        )
+        out.write(
+            f"  nearby_pairs={logic.get('nearby_pairs', 0)} "
+            f"logic_findings={logic.get('logic_finding_count', 0)}\n"
+        )
+
+    perturb = extra_sections.get("perturbation", {})
+    if perturb:
+        out.write("xptest: perturbation summary\n")
+        out.write(
+            f"  scenarios={perturb.get('scenario_count', 0)} "
+            f"findings={perturb.get('finding_count', 0)}\n"
+        )

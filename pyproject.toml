@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+drift = [
+    "boto3>=1.34",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",

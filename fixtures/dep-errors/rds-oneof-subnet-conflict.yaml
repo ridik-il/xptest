@@ -1,0 +1,46 @@
+# Subtle dependency/config fixture:
+# 1) one-of style conflict: both dbSubnetGroupName and dbSubnetGroupNameRef are set
+# 2) hidden dependency bug: patch references a typo resource name (db-subnett)
+# Expected: L2-03/dangling-reference CRITICAL.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: rds-oneof-subnet-conflict
+spec:
+  compositeTypeRef:
+    apiVersion: aws.example.org/v1alpha1
+    kind: XVPCNetwork
+  mode: Resources
+  resources:
+    - name: db-subnet
+      base:
+        apiVersion: ec2.aws.crossplane.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            cidrBlock: "10.0.20.0/24"
+            region: eu-west-1
+            availabilityZone: eu-west-1a
+
+    - name: main-db
+      base:
+        apiVersion: rds.aws.crossplane.io/v1beta1
+        kind: DBInstance
+        spec:
+          forProvider:
+            dbInstanceClass: db.t3.micro
+            engine: postgres
+            region: eu-west-1
+            storageEncrypted: true
+            publiclyAccessible: false
+            # one-of style conflict in many provider schemas
+            dbSubnetGroupName: "manual-subnet-group"
+            dbSubnetGroupNameRef:
+              name: db-subnet-group
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: status.atProvider.db-subnett.subnetId
+          toFieldPath: spec.forProvider.dbSubnetGroupName
+      readinessChecks:
+        - type: NonEmpty
+          fieldPath: status.atProvider.dbInstanceArn

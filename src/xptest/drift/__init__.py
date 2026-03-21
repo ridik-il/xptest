@@ -17,7 +17,7 @@ from xptest.drift.aws_checker import (
     check_vpcs,
 )
 from xptest.drift.models import DriftError, DriftFinding
-from xptest.models import ComposedResource, CompositionObject
+from xptest.models import CompositionObject
 
 # Resource kinds handled by each checker
 _VPC_KINDS = {"VPC", "Subnet", "SecurityGroup", "RouteTable"}

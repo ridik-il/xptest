@@ -29,6 +29,13 @@ class Finding:
     severity: Severity
     message: str
     remediation: str
+    # Optional metadata for advanced/offline analysis modules.
+    finding_id: str = ""
+    category: str = ""
+    case_id: str = ""
+    baseline_case_id: str = ""
+    perturbation_id: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

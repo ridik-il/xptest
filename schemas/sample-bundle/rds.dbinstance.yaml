@@ -39,6 +39,8 @@ spec:
                       type: boolean
                     publiclyAccessible:
                       type: boolean
+                    dbSubnetGroupName:
+                      type: string
                     dbSubnetGroupNameRef:
                       type: object
                       properties:
@@ -55,6 +57,9 @@ spec:
                       type: object
                       additionalProperties:
                         type: string
+                  oneOf:
+                    - required: [dbSubnetGroupName]
+                    - required: [dbSubnetGroupNameRef]
             status:
               type: object
               properties:

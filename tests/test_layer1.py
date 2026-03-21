@@ -157,3 +157,45 @@ def test_provider_lock_unknown_kind_warns(tmp_path):
     lock = [f for f in findings if f.rule == "L1-04/unknown-provider-kind"]
     assert len(lock) >= 1
     assert lock[0].severity == Severity.WARNING
+
+
+def test_schema_oneof_violation_detected(tmp_path):
+    import textwrap
+    from pathlib import Path
+
+    xrd = tmp_path / "xrd.yaml"
+    xrd.write_text(Path(XRD_PATH).read_text())
+
+    comp = tmp_path / "oneof_violation.yaml"
+    comp.write_text(
+        textwrap.dedent("""
+        apiVersion: apiextensions.crossplane.io/v1
+        kind: Composition
+        metadata:
+          name: oneof-violation-test
+        spec:
+          compositeTypeRef:
+            apiVersion: aws.example.org/v1alpha1
+            kind: XVPCNetwork
+          mode: Resources
+          resources:
+            - name: main-db
+              base:
+                apiVersion: rds.aws.crossplane.io/v1beta1
+                kind: DBInstance
+                spec:
+                  forProvider:
+                    dbInstanceClass: db.t3.micro
+                    engine: postgres
+                    region: eu-west-1
+                    dbSubnetGroupName: manual-subnet-group
+                    dbSubnetGroupNameRef:
+                      name: referenced-subnet-group
+        """)
+    )
+
+    obj = load(str(comp), str(xrd), crd_bundle_path=SAMPLE_BUNDLE)
+    findings = layer1.run(obj)
+    schema = [f for f in findings if f.rule == "L1-01/schema-violation"]
+    assert len(schema) >= 1
+    assert schema[0].severity == Severity.CRITICAL

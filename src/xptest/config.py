@@ -34,6 +34,9 @@ class Config:
     environment_config_paths: list[str] = field(default_factory=list)
     severity_overrides: dict[str, str] = field(default_factory=dict)
     mandatory_tag_keys: list[str] = field(default_factory=list)
+    # Drift detection (Stage 3)
+    aws_region: str = ""
+    drift_resource_filter: list[str] = field(default_factory=list)
 
 
 class ConfigError(ValueError):
@@ -75,6 +78,8 @@ def load_config(config_path: str | None) -> Config:
         ],
         severity_overrides=severity_overrides,
         mandatory_tag_keys=raw.get("mandatory_tag_keys", []),
+        aws_region=raw.get("aws_region", ""),
+        drift_resource_filter=raw.get("drift_resource_filter", []),
     )
 
 

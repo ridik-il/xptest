@@ -1,0 +1,3 @@
+[
+  {"layer": 2, "rule": "L2-03/dangling-reference", "severity": "CRITICAL"}
+]

@@ -1,0 +1,48 @@
+{
+  "findings": [],
+  "sections": {
+    "logic": {
+      "coverage": {
+        "total_cases": 2,
+        "unique_graphs": 1,
+        "unique_presence_signatures": 1,
+        "unique_field_signatures": 1
+      },
+      "coverage_records": [
+        {
+          "case_id": "auto-xr-0:serviceAccountName=demo,serviceAccountNamespace=dev",
+          "resource_presence_signature": "adde924898e4b251",
+          "field_signature": "4f53cda18c2baa0c"
+        },
+        {
+          "case_id": "auto-xr-1:serviceAccountName=demo,serviceAccountNamespace=prod",
+          "resource_presence_signature": "adde924898e4b251",
+          "field_signature": "4f53cda18c2baa0c"
+        }
+      ],
+      "nearby_pairs": 1,
+      "logic_finding_count": 0,
+      "snapshots": [
+        {
+          "case_id": "auto-xr-0:serviceAccountName=demo,serviceAccountNamespace=dev",
+          "resource_count": 1,
+          "edge_count": 0,
+          "graph_hash": "2528facf68ee1de7"
+        },
+        {
+          "case_id": "auto-xr-1:serviceAccountName=demo,serviceAccountNamespace=prod",
+          "resource_count": 1,
+          "edge_count": 0,
+          "graph_hash": "2528facf68ee1de7"
+        }
+      ]
+    },
+    "perturbation": {
+      "enabled": false,
+      "scenario_count": 0,
+      "finding_count": 0,
+      "scenarios": []
+    },
+    "critical_count": 0
+  }
+}

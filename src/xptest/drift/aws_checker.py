@@ -69,7 +69,10 @@ def _resource_missing_finding(resource: ComposedResource) -> DriftFinding:
         resource=resource.name,
         path="",
         severity=Severity.CRITICAL,
-        message=f"Resource '{resource.name}' ({resource.kind}) exists in composition but was not found in AWS.",
+        message=(
+            f"Resource '{resource.name}' ({resource.kind}) exists in composition "
+            "but was not found in AWS."
+        ),
         remediation="Verify the resource was provisioned or check for naming/tagging mismatches.",
         desired=f"{resource.api_version}/{resource.kind}",
         observed="<not found>",
@@ -174,13 +177,15 @@ def check_s3(session: Any, resources: list[ComposedResource]) -> list[DriftFindi
 
         # Check encryption
         try:
-            enc_resp = s3.get_bucket_encryption(Bucket=bucket_name)
+            s3.get_bucket_encryption(Bucket=bucket_name)
             has_encryption = True
         except s3.exceptions.ClientError as exc:
             if "ServerSideEncryptionConfigurationNotFoundError" in str(exc):
                 has_encryption = False
             else:
-                raise DriftError(f"Failed to get bucket encryption for {bucket_name}: {exc}") from exc
+                raise DriftError(
+                    f"Failed to get bucket encryption for {bucket_name}: {exc}"
+                ) from exc
 
         desired_enc = spec.get("serverSideEncryptionConfiguration")
         if desired_enc and not has_encryption:

@@ -1,0 +1,158 @@
+"""Heuristic finding generation for logic-test snapshots and nearby diffs."""
+
+from __future__ import annotations
+
+from collections import Counter
+
+from xptest.logic.models import DiffFinding, NearbyPair, RenderedGraphSnapshot
+from xptest.models import Severity
+
+
+def find_snapshot_heuristics(snapshot: RenderedGraphSnapshot) -> list[DiffFinding]:
+    findings: list[DiffFinding] = []
+
+    role_counts = Counter(n.role for n in snapshot.resources)
+    for role, count in role_counts.items():
+        if count > 1:
+            findings.append(
+                DiffFinding(
+                    finding_id="L5-H01/duplicate-semantic-role",
+                    category="logic-heuristic",
+                    severity=Severity.CRITICAL,
+                    case_id=snapshot.case_id,
+                    baseline_case_id="",
+                    resource_id=role,
+                    evidence={
+                        "message": (
+                            f"Duplicate semantic role '{role}' detected "
+                            f"({count} resources)."
+                        ),
+                        "count": count,
+                    },
+                    remediation=(
+                        "Ensure composition-resource-name annotations remain "
+                        "unique per role."
+                    ),
+                )
+            )
+
+    identity_counts = Counter(n.resource_id for n in snapshot.resources)
+    for rid, count in identity_counts.items():
+        if count > 1:
+            findings.append(
+                DiffFinding(
+                    finding_id="L5-H02/duplicate-resource-identity",
+                    category="logic-heuristic",
+                    severity=Severity.CRITICAL,
+                    case_id=snapshot.case_id,
+                    baseline_case_id="",
+                    resource_id=rid,
+                    evidence={
+                        "message": f"Duplicate resource identity '{rid}' detected ({count}).",
+                        "count": count,
+                    },
+                    remediation=(
+                        "Stabilize naming and annotation identity for rendered "
+                        "resources."
+                    ),
+                )
+            )
+
+    return findings
+
+
+def find_nearby_diff_heuristics(
+    snapshots: dict[str, RenderedGraphSnapshot],
+    pairs: list[NearbyPair],
+) -> list[DiffFinding]:
+    findings: list[DiffFinding] = []
+    for pair in pairs:
+        a = snapshots[pair.case_a]
+        b = snapshots[pair.case_b]
+
+        a_ids = {n.resource_id for n in a.resources}
+        b_ids = {n.resource_id for n in b.resources}
+
+        removed = sorted(a_ids - b_ids)
+        added = sorted(b_ids - a_ids)
+
+        if removed:
+            findings.append(
+                DiffFinding(
+                    finding_id="L5-D01/unexpected-resource-removal",
+                    category="nearby-diff",
+                    severity=Severity.WARNING,
+                    case_id=b.case_id,
+                    baseline_case_id=a.case_id,
+                    resource_id=",".join(removed),
+                    evidence={
+                        "message": "Nearby input change removed rendered resources.",
+                        "removed": removed,
+                        "distance": pair.distance,
+                    },
+                    remediation="Review branch guards to ensure required resources are stable.",
+                )
+            )
+
+        if added:
+            findings.append(
+                DiffFinding(
+                    finding_id="L5-D02/unexpected-resource-addition",
+                    category="nearby-diff",
+                    severity=Severity.WARNING,
+                    case_id=b.case_id,
+                    baseline_case_id=a.case_id,
+                    resource_id=",".join(added),
+                    evidence={
+                        "message": "Nearby input change added new rendered resources.",
+                        "added": added,
+                        "distance": pair.distance,
+                    },
+                    remediation="Review conditional rendering logic for overly sensitive branches.",
+                )
+            )
+
+        if pair.distance <= 1 and (len(removed) + len(added)) >= 3:
+            findings.append(
+                DiffFinding(
+                    finding_id="L5-D03/large-shift-small-input",
+                    category="nearby-diff",
+                    severity=Severity.CRITICAL,
+                    case_id=b.case_id,
+                    baseline_case_id=a.case_id,
+                    resource_id="",
+                    evidence={
+                        "message": "Small input delta caused large rendered graph shift.",
+                        "distance": pair.distance,
+                        "added_count": len(added),
+                        "removed_count": len(removed),
+                    },
+                    remediation=(
+                        "Harden branch conditions or split high-impact logic into "
+                        "explicit feature flags."
+                    ),
+                )
+            )
+
+        if _edges_changed(a, b):
+            findings.append(
+                DiffFinding(
+                    finding_id="L5-D04/dependency-edge-shift",
+                    category="nearby-diff",
+                    severity=Severity.WARNING,
+                    case_id=b.case_id,
+                    baseline_case_id=a.case_id,
+                    resource_id="",
+                    evidence={
+                        "message": "Dependency edges changed across nearby input cases.",
+                        "distance": pair.distance,
+                    },
+                    remediation="Review dependency-bearing fields and generated references.",
+                )
+            )
+
+    return findings
+
+
+def _edges_changed(a: RenderedGraphSnapshot, b: RenderedGraphSnapshot) -> bool:
+    return set(a.edges) != set(b.edges)
