@@ -11,8 +11,8 @@ import pytest
 
 from xptest.config import Config
 from xptest.drift.comparator import compare_fields
-from xptest.drift.models import DriftError, DriftFinding
-from xptest.models import ComposedResource, CompositionObject, CompositionMode, Severity
+from xptest.drift.models import DriftError
+from xptest.models import ComposedResource, CompositionMode, CompositionObject, Severity
 
 
 def _make_resource(name: str, kind: str, spec: dict | None = None) -> ComposedResource:
@@ -227,7 +227,9 @@ class TestIamChecker:
                 "Arn": "arn:aws:iam::123:role/app-role",
                 "AssumeRolePolicyDocument": {
                     "Version": "2012-10-17",
-                    "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}}],
+                    "Statement": [
+                        {"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}}
+                    ],
                 },
             }
         }
@@ -308,6 +310,6 @@ class TestDriftRun:
         )
         # Filter to VPC only — RDS should not be checked
         cfg = _config(drift_resource_filter=["VPC"])
-        findings = drift_run(obj, cfg, session=session)
+        drift_run(obj, cfg, session=session)
         # Only VPC checker should run, not RDS
         session.client.assert_called_with("ec2")

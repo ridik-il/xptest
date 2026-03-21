@@ -247,7 +247,6 @@ def _cmd_drift(args: argparse.Namespace) -> int:
 
     try:
         from xptest.drift import run as drift_run
-        from xptest.drift.models import DriftError
 
         drift_findings = drift_run(obj, cfg)
     except ImportError:

@@ -1,0 +1,61 @@
+{
+  "_comment": "Stage 3 drift detection — minimum IAM permission set (framework-design.md §4.2). Reference only; not provisioned by code.",
+
+  "iam_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "XptestDriftReadOnly",
+        "Effect": "Allow",
+        "Action": [
+          "ec2:DescribeVpcs",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeRouteTables",
+
+          "s3:GetBucketEncryption",
+          "s3:GetBucketPolicy",
+          "s3:GetPublicAccessBlock",
+
+          "rds:DescribeDBInstances",
+          "rds:DescribeDBSubnetGroups",
+          "rds:DescribeDBParameterGroups",
+
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListAttachedRolePolicies"
+        ],
+        "Resource": "*"
+      }
+    ]
+  },
+
+  "oidc_trust_policy": {
+    "_comment": "Attach this trust policy to the IAM role assumed by the drift workflow. Replace ACCOUNT_ID and REPO with your values.",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+          },
+          "StringLike": {
+            "token.actions.githubusercontent.com:sub": "repo:OWNER/REPO:environment:aws-drift"
+          }
+        }
+      }
+    ]
+  },
+
+  "credential_model": {
+    "type": "OIDC federation (no static secrets)",
+    "token_lifetime": "1 hour",
+    "permissions": "read-only (Describe*, Get*, List*)",
+    "no_write_permissions": true
+  }
+}
