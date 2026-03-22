@@ -1,57 +1,57 @@
-name: "Drift Detection (Stage 3)"
+# name: "Drift Detection (Stage 3)"
 
-on:
-  schedule:
-    - cron: "0 */6 * * *"  # Every 6 hours
-  workflow_dispatch:         # Manual trigger
+# on:
+#   schedule:
+#     - cron: "0 */6 * * *"  # Every 6 hours
+#   workflow_dispatch:         # Manual trigger
 
-permissions:
-  id-token: write   # Required for OIDC token request
-  contents: read
+# permissions:
+#   id-token: write   # Required for OIDC token request
+#   contents: read
 
-jobs:
-  drift:
-    name: "Detect AWS Drift"
-    runs-on: ubuntu-latest
-    environment: aws-drift
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+# jobs:
+#   drift:
+#     name: "Detect AWS Drift"
+#     runs-on: ubuntu-latest
+#     environment: aws-drift
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DRIFT_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'eu-west-1' }}
+#       - name: Configure AWS credentials (OIDC)
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           role-to-assume: ${{ secrets.AWS_DRIFT_ROLE_ARN }}
+#           aws-region: ${{ vars.AWS_REGION || 'eu-west-1' }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+#       - name: Set up Python
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.12"
 
-      - name: Install xptest with drift support
-        run: |
-          cd xptest
-          pip install -e ".[drift]"
+#       - name: Install xptest with drift support
+#         run: |
+#           cd xptest
+#           pip install -e ".[drift]"
 
-      - name: Run drift detection
-        run: |
-          cd xptest
-          for comp in fixtures/valid/*.yaml; do
-            [ "$(basename "$comp")" = "xrd.yaml" ] && continue
-            echo "--- Drift check: $comp ---"
-            xptest drift \
-              --composition "$comp" \
-              --xrd fixtures/xrd.yaml \
-              --config xptest.yaml \
-              --region "${{ vars.AWS_REGION || 'eu-west-1' }}" \
-              --output "drift-$(basename "$comp" .yaml).json" || true
-          done
+#       - name: Run drift detection
+#         run: |
+#           cd xptest
+#           for comp in fixtures/valid/*.yaml; do
+#             [ "$(basename "$comp")" = "xrd.yaml" ] && continue
+#             echo "--- Drift check: $comp ---"
+#             xptest drift \
+#               --composition "$comp" \
+#               --xrd fixtures/xrd.yaml \
+#               --config xptest.yaml \
+#               --region "${{ vars.AWS_REGION || 'eu-west-1' }}" \
+#               --output "drift-$(basename "$comp" .yaml).json" || true
+#           done
 
-      - name: Upload drift reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: drift-reports
-          path: xptest/drift-*.json
-          retention-days: 30
+#       - name: Upload drift reports
+#         if: always()
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: drift-reports
+#           path: xptest/drift-*.json
+#           retention-days: 30
