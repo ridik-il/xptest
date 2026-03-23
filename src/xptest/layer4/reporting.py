@@ -125,3 +125,23 @@ def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO
             f"  scenarios={perturb.get('scenario_count', 0)} "
             f"findings={perturb.get('finding_count', 0)}\n"
         )
+
+    exploration = extra_sections.get("exploration", {})
+    if exploration:
+        out.write("xptest: exploration summary\n")
+        out.write(
+            f"  inputs={exploration.get('total_inputs', 0)} "
+            f"renders={exploration.get('successful_renders', 0)} "
+            f"fault_renders={exploration.get('fault_injection_renders', 0)}\n"
+        )
+        out.write(
+            f"  breaking_changes={exploration.get('breaking_change_count', 0)} "
+            f"invariants={exploration.get('invariant_count', 0)} "
+            f"fault_findings={exploration.get('fault_injection_count', 0)}\n"
+        )
+        tc = exploration.get("template_coverage", {})
+        if tc:
+            out.write(
+                f"  template_coverage={tc.get('coverage_pct', 0):.1f}% "
+                f"({tc.get('covered_branches', 0)}/{tc.get('total_branches', 0)} branches)\n"
+            )

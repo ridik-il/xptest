@@ -228,7 +228,10 @@ class TestIamChecker:
                 "AssumeRolePolicyDocument": {
                     "Version": "2012-10-17",
                     "Statement": [
-                        {"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}}
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "lambda.amazonaws.com"},
+                        }
                     ],
                 },
             }
@@ -310,6 +313,6 @@ class TestDriftRun:
         )
         # Filter to VPC only — RDS should not be checked
         cfg = _config(drift_resource_filter=["VPC"])
-        drift_run(obj, cfg, session=session)
+        drift_run(obj, cfg, session=session)  # result unused; we assert on mock calls
         # Only VPC checker should run, not RDS
         session.client.assert_called_with("ec2")

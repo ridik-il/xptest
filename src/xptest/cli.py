@@ -158,6 +158,64 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     drift.set_defaults(func=_cmd_drift)
 
+    # --- explore ---
+    exp = sub.add_parser(
+        "explore",
+        help="Run Behavioral Exploration Module (input synthesis, breaking change).",
+    )
+    exp.add_argument("--composition", required=True, help="Path to Composition YAML.")
+    exp.add_argument("--xrd", required=True, help="Path to CompositeResourceDefinition YAML.")
+    exp.add_argument("--functions", required=True, help="Path to functions.yaml for render.")
+    exp.add_argument(
+        "--xr",
+        default=None,
+        help="Optional base XR YAML. If omitted, inputs are auto-generated from XRD.",
+    )
+    exp.add_argument(
+        "--observed-resources",
+        default=None,
+        help="Optional observed-resources YAML for baseline renders.",
+    )
+    exp.add_argument(
+        "--baseline",
+        default=None,
+        help="Path to golden baseline JSON. Overrides config baseline_path.",
+    )
+    exp.add_argument(
+        "--max-inputs",
+        type=int,
+        default=0,
+        help="Max pairwise inputs to generate (0 = use config default).",
+    )
+    exp.add_argument(
+        "--coverage-threshold",
+        type=float,
+        default=0.0,
+        help="Min branch coverage %% to pass (0 = no enforcement).",
+    )
+    exp.add_argument(
+        "--fault-inject",
+        action="store_true",
+        default=True,
+        help="Run fault injection sweep (default: true).",
+    )
+    exp.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="Save current render results as new golden baseline.",
+    )
+    exp.add_argument(
+        "--config",
+        default=None,
+        help="Path to xptest.yaml config file (default: ./xptest.yaml if present).",
+    )
+    exp.add_argument(
+        "--output",
+        default="exploration-report.json",
+        help="Output path for exploration report JSON (default: exploration-report.json).",
+    )
+    exp.set_defaults(func=_cmd_explore)
+
     return parser
 
 
@@ -260,6 +318,221 @@ def _cmd_drift(args: argparse.Namespace) -> int:
         return 1
 
     return layer4.write(drift_findings, output_path=args.output)
+
+
+def _cmd_explore(args: argparse.Namespace) -> int:
+    """Run Behavioral Exploration Module: input synthesis → render → analysis."""
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"xptest: config error — {exc}\n")
+        return 1
+
+    from xptest.exploration.breaking_change import (
+        detect_breaking_changes,
+        load_baseline,
+        save_baseline,
+    )
+    from xptest.exploration.fault_injection import run_fault_injection
+    from xptest.exploration.input_synthesis import generate_seed_suite
+    from xptest.exploration.invariants import (
+        check_deletion_policy_escalation,
+        check_minimum_resource_count,
+        check_type_coverage,
+        collect_baseline_deletion_policies,
+        collect_declared_gvks,
+        compute_baseline_min_count,
+    )
+    from xptest.exploration.template_coverage import measure_coverage
+
+    max_inputs = args.max_inputs or cfg.max_exploration_inputs or 100
+    baseline_path = args.baseline or cfg.baseline_path
+    cov_threshold = args.coverage_threshold or cfg.coverage_threshold
+
+    # Phase 1: Generate inputs
+    if args.xr:
+        # Single explicit XR — use it directly
+        candidates = [("explicit-xr", None)]
+        use_explicit_xr = True
+    else:
+        candidates = generate_seed_suite(args.xrd, max_count=max_inputs)
+        use_explicit_xr = False
+        if not candidates:
+            sys.stderr.write("xptest: no input candidates generated from XRD\n")
+            return 1
+
+    sys.stderr.write(f"xptest explore: {len(candidates)} input(s) to render\n")
+
+    # Phase 2: Render loop — build snapshots
+    all_findings: list[Finding] = []
+    snapshots: list = []
+    first_obj = None
+
+    for idx, (label, xr_doc) in enumerate(candidates):
+        if use_explicit_xr:
+            xr_path = args.xr
+        else:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False
+            ) as fh:
+                yaml.safe_dump(xr_doc, fh, sort_keys=False)
+                xr_path = fh.name
+
+        try:
+            obj = load(
+                composition_path=args.composition,
+                xrd_path=args.xrd,
+                crd_bundle_path=cfg.crd_bundle_path,
+                xr_path=xr_path,
+                functions_path=args.functions,
+                observed_resources_path=args.observed_resources,
+                environment_config_paths=cfg.environment_config_paths,
+            )
+            if first_obj is None:
+                first_obj = obj
+
+            case_id = f"explore-{idx}:{label}" if not use_explicit_xr else "explore-0"
+            input_flat = (
+                flatten_input_spec(xr_doc.get("spec", {}), "spec")
+                if xr_doc
+                else {}
+            )
+            snapshot = build_snapshot(obj, case_id=case_id, input_flat=input_flat)
+            snapshots.append(snapshot)
+
+        except LoadError as exc:
+            sys.stderr.write(f"xptest: render error ({label}) — {exc}\n")
+            all_findings.append(Finding(
+                layer=7,
+                rule="explore/render-error",
+                resource="",
+                path="",
+                severity=Severity.CRITICAL,
+                message=f"Render failed for input '{label}': {exc}",
+                remediation="Check composition, XRD, and functions compatibility.",
+                finding_id="explore/render-error",
+                category="exploration",
+            ))
+        finally:
+            if not use_explicit_xr:
+                Path(xr_path).unlink(missing_ok=True)
+
+    if not snapshots:
+        sys.stderr.write("xptest: no successful renders — cannot proceed\n")
+        return layer4.write(all_findings, output_path=args.output)
+
+    sys.stderr.write(f"xptest explore: {len(snapshots)} render(s) succeeded\n")
+
+    # Phase 3: Breaking change detection
+    if baseline_path:
+        baseline = load_baseline(baseline_path)
+        if baseline:
+            bc_findings = detect_breaking_changes(baseline, snapshots)
+            all_findings.extend(bc_findings)
+            if bc_findings:
+                sys.stderr.write(
+                    f"xptest explore: {len(bc_findings)} breaking change(s) detected\n"
+                )
+
+    # Phase 4: Resource preservation invariants
+    declared_gvks = collect_declared_gvks(snapshots)
+    type_cov_findings = check_type_coverage(declared_gvks, snapshots)
+    all_findings.extend(type_cov_findings)
+
+    baseline_policies = collect_baseline_deletion_policies(snapshots)
+    dp_findings = check_deletion_policy_escalation(baseline_policies, snapshots)
+    all_findings.extend(dp_findings)
+
+    min_count = compute_baseline_min_count(snapshots)
+    min_count_findings = check_minimum_resource_count(min_count, snapshots)
+    all_findings.extend(min_count_findings)
+
+    # Phase 5: Fault injection
+    if args.fault_inject and first_obj is not None:
+        seed_xr = args.xr
+        if not seed_xr and candidates:
+            _, first_doc = candidates[0]
+            if first_doc:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".yaml", delete=False
+                ) as fh:
+                    yaml.safe_dump(first_doc, fh, sort_keys=False)
+                    seed_xr = fh.name
+
+        if seed_xr:
+            try:
+                fi_findings, fi_snapshots = run_fault_injection(
+                    first_obj,
+                    composition_path=args.composition,
+                    xr_path=seed_xr,
+                    functions_path=args.functions,
+                    environment_config_paths=cfg.environment_config_paths,
+                )
+                all_findings.extend(fi_findings)
+                snapshots.extend(fi_snapshots)
+                if fi_findings:
+                    sys.stderr.write(
+                        f"xptest explore: {len(fi_findings)} fault injection finding(s)\n"
+                    )
+            except Exception as exc:
+                sys.stderr.write(f"xptest: fault injection error — {exc}\n")
+            finally:
+                if not args.xr and seed_xr:
+                    Path(seed_xr).unlink(missing_ok=True)
+
+    # Phase 6: Template coverage (requires Go helper)
+    coverage_report = measure_coverage("", [])  # placeholder until Go helper exists
+
+    # Phase 7: Save baseline if requested
+    if args.save_baseline and first_obj is not None:
+        save_path = baseline_path or "baselines/baseline.json"
+        save_baseline(snapshots, first_obj.composition_name, save_path)
+        sys.stderr.write(f"xptest explore: baseline saved to {save_path}\n")
+
+    # Build report
+    report_sections: dict[str, Any] = {
+        "exploration": {
+            "total_inputs": len(candidates),
+            "successful_renders": len([s for s in snapshots if "|" not in s.case_id]),
+            "fault_injection_renders": len([s for s in snapshots if "|" in s.case_id]),
+            "breaking_change_count": len(
+                [f for f in all_findings if f.category == "breaking-change"]
+            ),
+            "invariant_count": len(
+                [f for f in all_findings if f.category == "invariant"]
+            ),
+            "fault_injection_count": len(
+                [f for f in all_findings if f.category == "fault-injection"]
+            ),
+            "template_coverage": {
+                "total_branches": coverage_report.total_branches,
+                "covered_branches": coverage_report.covered_branches,
+                "coverage_pct": coverage_report.coverage_pct,
+            },
+        },
+        "critical_count": sum(1 for f in all_findings if f.severity == Severity.CRITICAL),
+    }
+
+    # Coverage threshold enforcement
+    if cov_threshold > 0 and coverage_report.coverage_pct < cov_threshold:
+        all_findings.append(Finding(
+            layer=7,
+            rule="explore/coverage-below-threshold",
+            resource="",
+            path="",
+            severity=Severity.WARNING,
+            message=(
+                f"Branch coverage {coverage_report.coverage_pct:.1f}% "
+                f"below threshold {cov_threshold:.1f}%."
+            ),
+            remediation="Add input combinations that exercise uncovered template branches.",
+            finding_id="explore/coverage-below-threshold",
+            category="exploration",
+        ))
+
+    return layer4.write_extended(
+        all_findings, output_path=args.output, extra_sections=report_sections
+    )
 
 
 def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:

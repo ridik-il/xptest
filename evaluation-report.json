@@ -2,7 +2,7 @@
   "summary": {
     "2": {
       "layer": 2,
-      "tp": 6,
+      "tp": 7,
       "fp": 0,
       "fn": 0,
       "severity_mismatches": 0,
@@ -64,6 +64,15 @@
     },
     {
       "fixture": "rds-dangling-subnet",
+      "expected": 1,
+      "actual": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "details": []
+    },
+    {
+      "fixture": "rds-oneof-subnet-conflict",
       "expected": 1,
       "actual": 1,
       "tp": 1,

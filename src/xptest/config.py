@@ -37,6 +37,10 @@ class Config:
     # Drift detection (Stage 3)
     aws_region: str = ""
     drift_resource_filter: list[str] = field(default_factory=list)
+    # Exploration (Stage 4)
+    baseline_path: str = ""
+    max_exploration_inputs: int = 100
+    coverage_threshold: float = 0.0
 
 
 class ConfigError(ValueError):
@@ -80,6 +84,9 @@ def load_config(config_path: str | None) -> Config:
         mandatory_tag_keys=raw.get("mandatory_tag_keys", []),
         aws_region=raw.get("aws_region", ""),
         drift_resource_filter=raw.get("drift_resource_filter", []),
+        baseline_path=_resolve_path(raw.get("baseline_path", ""), base_dir),
+        max_exploration_inputs=int(raw.get("max_exploration_inputs", 100)),
+        coverage_threshold=float(raw.get("coverage_threshold", 0.0)),
     )
 
 
