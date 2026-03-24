@@ -464,7 +464,8 @@ def _check_iam_role(
     try:
         resp = iam.get_role(RoleName=role_name)
     except Exception as exc:
-        if "NoSuchEntity" in str(exc):
+        exc_name = type(exc).__name__
+        if "NoSuchEntity" in str(exc) or "NoSuchEntity" in exc_name:
             return [_resource_missing_finding(resource)]
         raise DriftError(f"Failed to get IAM role {role_name}: {exc}") from exc
 
