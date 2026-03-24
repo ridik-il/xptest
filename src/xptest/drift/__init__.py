@@ -33,12 +33,14 @@ class DriftReport:
     """Drift detection results with timing metrics (§3.3.4).
 
     discovery_latency_s: time from start to first finding (seconds).
+    remedy_latency_s: time from first finding to last finding (seconds).
     total_duration_s: total drift detection wall-clock time.
     """
 
     findings: list[DriftFinding] = field(default_factory=list)
     total_duration_s: float = 0.0
     discovery_latency_s: float | None = None
+    remedy_latency_s: float | None = None
     resources_checked: int = 0
 
 
@@ -104,6 +106,7 @@ def run_with_timing(
 
     findings: list[DriftFinding] = []
     first_finding_time: float | None = None
+    last_finding_time: float | None = None
 
     for checker, checker_resources in [
         (check_vpcs, vpc_resources),
@@ -113,8 +116,11 @@ def run_with_timing(
     ]:
         if checker_resources:
             batch = checker(session, checker_resources)
-            if batch and first_finding_time is None:
-                first_finding_time = time.monotonic()
+            if batch:
+                now = time.monotonic()
+                if first_finding_time is None:
+                    first_finding_time = now
+                last_finding_time = now
             findings.extend(batch)
 
     t_end = time.monotonic()
@@ -122,12 +128,20 @@ def run_with_timing(
     discovery_latency = (
         (first_finding_time - t_start) if first_finding_time is not None else None
     )
+    remedy_latency = (
+        (last_finding_time - first_finding_time)
+        if first_finding_time is not None and last_finding_time is not None
+        else None
+    )
 
     return DriftReport(
         findings=findings,
         total_duration_s=round(total_duration, 4),
         discovery_latency_s=(
             round(discovery_latency, 4) if discovery_latency is not None else None
+        ),
+        remedy_latency_s=(
+            round(remedy_latency, 4) if remedy_latency is not None else None
         ),
         resources_checked=len(resources),
     )

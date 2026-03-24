@@ -333,10 +333,15 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         load_baseline,
         save_baseline,
     )
-    from xptest.exploration.fault_injection import run_fault_injection
+    from xptest.exploration.determinism import compute_determinism_score
+    from xptest.exploration.fault_injection import (
+        compute_mutation_score,
+        run_fault_injection,
+    )
     from xptest.exploration.input_synthesis import (
         _extract_parameters,
         _read_xrd,
+        compute_tway_coverage,
         extend_suite,
         generate_seed_suite,
     )
@@ -453,7 +458,12 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     all_findings.extend(min_count_findings)
 
     # Phase 5: Fault injection
+    fi_findings: list[Finding] = []
+    fault_sweep_count = 0
     if args.fault_inject and first_obj is not None:
+        from xptest.exploration.fault_injection import build_fault_sweep_order
+
+        fault_sweep_count = len(build_fault_sweep_order(first_obj))
         seed_xr = args.xr
         if not seed_xr and candidates:
             _, first_doc = candidates[0]
@@ -538,7 +548,63 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                 finally:
                     Path(ext_xr_path).unlink(missing_ok=True)
 
-    # Phase 7: Save baseline if requested
+    # Phase 7: Compute §3.3.4 metrics
+    # t-way coverage
+    tway_report: dict[str, Any] = {"t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0}
+    if not use_explicit_xr:
+        xrd_doc_m = _read_xrd(args.xrd)
+        xrd_spec_m = (
+            xrd_doc_m.get("spec", {})
+            .get("versions", [{}])[0]
+            .get("schema", {})
+            .get("openAPIV3Schema", {})
+            .get("properties", {})
+            .get("spec", {})
+        )
+        params_m = _extract_parameters(xrd_spec_m)
+        if params_m:
+            tway_report = compute_tway_coverage(candidates, params_m, t=2)
+
+    # Mutation score
+    mutation_report = compute_mutation_score(fault_sweep_count, fi_findings)
+
+    # Determinism score — re-render first few inputs and compare
+    determinism_report: dict[str, Any] = {"total_inputs": 0, "identical_outputs": 0, "determinism_score": 1.0}
+    det_limit = min(5, len(candidates))
+    if det_limit > 0 and not use_explicit_xr:
+        run_b_snapshots: list = []
+        for idx in range(det_limit):
+            label, xr_doc = candidates[idx]
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False
+            ) as fh:
+                yaml.safe_dump(xr_doc, fh, sort_keys=False)
+                det_xr_path = fh.name
+            try:
+                det_obj = load(
+                    composition_path=args.composition,
+                    xrd_path=args.xrd,
+                    crd_bundle_path=cfg.crd_bundle_path,
+                    xr_path=det_xr_path,
+                    functions_path=args.functions,
+                    observed_resources_path=args.observed_resources,
+                    environment_config_paths=cfg.environment_config_paths,
+                )
+                det_case = f"det-{idx}:{label}"
+                det_flat = flatten_input_spec(xr_doc.get("spec", {}), "spec")
+                det_snap = build_snapshot(det_obj, case_id=det_case, input_flat=det_flat)
+                run_b_snapshots.append(det_snap)
+            except LoadError:
+                pass
+            finally:
+                Path(det_xr_path).unlink(missing_ok=True)
+
+        # Compare run_b against the first N snapshots from run_a
+        run_a_subset = [s for s in snapshots if "fault|" not in s.case_id][:det_limit]
+        if len(run_a_subset) == len(run_b_snapshots):
+            determinism_report = compute_determinism_score(run_a_subset, run_b_snapshots)
+
+    # Phase 8: Save baseline if requested
     if args.save_baseline and first_obj is not None:
         save_path = baseline_path or "baselines/baseline.json"
         save_baseline(snapshots, first_obj.composition_name, save_path)
@@ -564,6 +630,9 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                 "covered_branches": coverage_report.covered_branches,
                 "coverage_pct": coverage_report.coverage_pct,
             },
+            "tway_coverage": tway_report,
+            "mutation_score": mutation_report,
+            "determinism_score": determinism_report,
         },
         "critical_count": sum(1 for f in all_findings if f.severity == Severity.CRITICAL),
     }
