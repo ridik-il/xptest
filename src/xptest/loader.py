@@ -89,6 +89,7 @@ def load(
         resources=resources,
         xrd_spec=xrd_doc.get("spec", {}),
         crd_bundle_path=crd_bundle_path,
+        environment_config_paths=environment_config_paths or [],
     )
 
 

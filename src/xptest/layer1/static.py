@@ -42,6 +42,7 @@ def run(obj: CompositionObject) -> list[Finding]:
     findings.extend(_check_duplicate_names(obj))
     findings.extend(_check_provider_lock(obj))
     findings.extend(_check_patch_field_paths(obj))
+    findings.extend(_check_environment_config_present(obj))
     if obj.crd_bundle_path:
         findings.extend(_check_schema(obj))
     return findings
@@ -184,6 +185,53 @@ def _check_patch_field_paths(obj: CompositionObject) -> list[Finding]:
                         )
                     )
     return findings
+
+
+# ---------------------------------------------------------------------------
+# L1-06 — EnvironmentConfig fixture presence
+# ---------------------------------------------------------------------------
+
+
+def _check_environment_config_present(obj: CompositionObject) -> list[Finding]:
+    """Warn when a composition uses FromEnvironmentFieldPath patches but no
+    EnvironmentConfig fixture files were supplied.
+
+    Design ref: framework-design.md §3.1, Decision 2.
+    """
+    uses_env = False
+    for res in obj.resources:
+        for patch in res.patches:
+            patch_type = patch.get("type", "")
+            if patch_type == "FromEnvironmentFieldPath":
+                uses_env = True
+                break
+        if uses_env:
+            break
+
+    if not uses_env:
+        return []
+
+    if obj.environment_config_paths:
+        return []
+
+    return [
+        Finding(
+            layer=1,
+            rule="L1-06/environment-config-missing",
+            resource="",
+            path="patches[type=FromEnvironmentFieldPath]",
+            severity=Severity.WARNING,
+            message=(
+                "Composition uses FromEnvironmentFieldPath patches but no "
+                "EnvironmentConfig fixture files were supplied. "
+                "Rendered values may be empty or incorrect."
+            ),
+            remediation=(
+                "Supply EnvironmentConfig fixtures via environment_config_paths "
+                "in xptest.yaml or the -e flag in crossplane render."
+            ),
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

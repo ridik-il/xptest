@@ -76,3 +76,6 @@ class CompositionObject:
 
     # Path to the CRD bundle directory (read from config)
     crd_bundle_path: str = ""
+
+    # EnvironmentConfig fixture paths supplied at load time
+    environment_config_paths: list[str] = field(default_factory=list)

@@ -50,9 +50,66 @@ def run(obj: CompositionObject, config: Config) -> list[Finding]:
     if not rules_dir.is_dir():
         return []
 
+    findings: list[Finding] = []
+
+    # Decision 1: enforce pinned OPA version when configured
+    if config.opa_expected_version:
+        version_finding = _check_opa_version(config)
+        if version_finding:
+            findings.append(version_finding)
+
     opa_input = _build_input(obj, config)
     raw_violations = _evaluate_opa(opa_input, rules_dir, config)
-    return _violations_to_findings(raw_violations, config)
+    findings.extend(_violations_to_findings(raw_violations, config))
+    return findings
+
+
+def _check_opa_version(config: Config) -> Finding | None:
+    """Verify that the running OPA version matches the pinned version.
+
+    Design ref: framework-design.md Decision 1 — pinned OPA version.
+    Returns a WARNING finding on mismatch, None if versions match.
+    """
+    import re as _re
+
+    try:
+        result = subprocess.run(
+            [config.opa_binary, "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None  # OPA binary issue will be caught later during eval
+
+    # OPA version output: "Version: 0.60.0" or similar
+    match = _re.search(r"Version:\s*(\S+)", result.stdout)
+    if not match:
+        return None
+
+    actual_version = match.group(1)
+    expected = config.opa_expected_version.strip()
+
+    if actual_version == expected:
+        return None
+
+    return Finding(
+        layer=3,
+        rule="L3-01/opa-version-mismatch",
+        resource="",
+        path="opa_expected_version",
+        severity=Severity.WARNING,
+        message=(
+            f"OPA binary version '{actual_version}' does not match "
+            f"pinned version '{expected}'. Policy evaluation may produce "
+            "different results than expected."
+        ),
+        remediation=(
+            f"Install OPA version {expected} or update "
+            "opa_expected_version in xptest.yaml."
+        ),
+    )
 
 
 def _build_input(obj: CompositionObject, config: Config) -> dict[str, Any]:

@@ -14,6 +14,7 @@ boto3 is imported lazily — only when drift detection is actually invoked.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from xptest.drift.comparator import compare_fields
@@ -99,8 +100,52 @@ def check_vpcs(session: Any, resources: list[ComposedResource]) -> list[DriftFin
             findings.extend(_check_subnet(ec2, r, spec))
         elif r.kind == "SecurityGroup":
             findings.extend(_check_security_group(ec2, r, spec))
+        elif r.kind == "RouteTable":
+            findings.extend(_check_route_table(ec2, r, spec))
 
     return findings
+
+
+def _check_route_table(
+    ec2: Any, resource: ComposedResource, spec: dict,
+) -> list[DriftFinding]:
+    """Check RouteTable for drift using ec2:DescribeRouteTables."""
+    vpc_id = spec.get("vpcId", "")
+    tags = spec.get("tags", {})
+
+    filters: list[dict[str, Any]] = []
+    if vpc_id:
+        filters.append({"Name": "vpc-id", "Values": [vpc_id]})
+
+    name_tag = tags.get("Name", "") if isinstance(tags, dict) else ""
+    if name_tag:
+        filters.append({"Name": "tag:Name", "Values": [name_tag]})
+
+    if not filters:
+        return []
+
+    try:
+        resp = ec2.describe_route_tables(Filters=filters)
+    except Exception as exc:
+        raise DriftError(f"Failed to describe RouteTables: {exc}") from exc
+
+    rts = resp.get("RouteTables", [])
+    if not rts:
+        return [_resource_missing_finding(resource)]
+
+    rt = rts[0]
+    rt_id = rt.get("RouteTableId", "")
+
+    mismatches: list[dict[str, str]] = []
+    observed_vpc = rt.get("VpcId", "")
+    if vpc_id and observed_vpc != vpc_id:
+        mismatches.append({
+            "path": "spec.forProvider.vpcId",
+            "desired": vpc_id,
+            "observed": observed_vpc,
+        })
+
+    return _make_findings(resource, mismatches, rt_id)
 
 
 def _check_vpc(ec2: Any, resource: ComposedResource, spec: dict) -> list[DriftFinding]:
@@ -216,106 +261,350 @@ def check_s3(session: Any, resources: list[ComposedResource]) -> list[DriftFindi
                 r, mismatches, f"arn:aws:s3:::{bucket_name}"
             ))
 
+        # Check bucket policy (s3:GetBucketPolicy)
+        desired_policy = spec.get("policy", "")
+        if desired_policy:
+            try:
+                policy_resp = s3.get_bucket_policy(Bucket=bucket_name)
+                observed_policy = policy_resp.get("Policy", "")
+            except s3.exceptions.ClientError as exc:
+                if "NoSuchBucketPolicy" in str(exc):
+                    observed_policy = ""
+                else:
+                    raise DriftError(
+                        f"Failed to get bucket policy for {bucket_name}: {exc}"
+                    ) from exc
+
+            desired_normalized = _normalize_json_str(desired_policy)
+            observed_normalized = _normalize_json_str(observed_policy)
+
+            if desired_normalized != observed_normalized:
+                findings.append(DriftFinding(
+                    layer=4,
+                    rule="drift/s3-bucket-policy",
+                    resource=r.name,
+                    path="spec.forProvider.policy",
+                    severity=Severity.CRITICAL,
+                    message=(
+                        f"S3 bucket '{bucket_name}' policy differs "
+                        "from composition."
+                    ),
+                    remediation=(
+                        "Update the S3 bucket policy or the composition "
+                        "to match."
+                    ),
+                    desired=desired_normalized[:200],
+                    observed=observed_normalized[:200] or "<no policy>",
+                    resource_arn=f"arn:aws:s3:::{bucket_name}",
+                ))
+
     return findings
 
 
 def check_rds(session: Any, resources: list[ComposedResource]) -> list[DriftFinding]:
-    """Check RDS DBInstance resources for drift."""
+    """Check RDS DBInstance, DBSubnetGroup, and DBParameterGroup for drift."""
     findings: list[DriftFinding] = []
     rds = session.client("rds")
 
     for r in resources:
-        if r.kind != "DBInstance":
-            continue
-
         spec = r.spec.get("forProvider", {})
 
-        try:
-            resp = rds.describe_db_instances()
-        except Exception as exc:
-            raise DriftError(f"Failed to describe DB instances: {exc}") from exc
+        if r.kind == "DBInstance":
+            findings.extend(_check_db_instance(rds, r, spec))
+        elif r.kind == "DBSubnetGroup":
+            findings.extend(_check_db_subnet_group(rds, r, spec))
+        elif r.kind == "DBParameterGroup":
+            findings.extend(_check_db_parameter_group(rds, r, spec))
 
-        instances = resp.get("DBInstances", [])
-        # Try to find matching instance by engine + class
-        matched = None
-        for inst in instances:
-            if (
-                inst.get("Engine") == spec.get("engine")
-                and inst.get("DBInstanceClass") == spec.get("dbInstanceClass")
-            ):
-                matched = inst
-                break
+    return findings
 
-        if matched is None:
-            findings.append(_resource_missing_finding(r))
-            continue
 
-        # Compare key fields
-        observed = {
-            "engine": matched.get("Engine", ""),
-            "dbInstanceClass": matched.get("DBInstanceClass", ""),
-            "storageEncrypted": matched.get("StorageEncrypted", False),
-            "publiclyAccessible": matched.get("PubliclyAccessible", False),
-        }
-        desired = {k: v for k, v in spec.items() if k in observed}
-        mismatches = compare_fields(desired, observed)
-        findings.extend(_make_findings(
-            r, mismatches, matched.get("DBInstanceArn", "")
+def _check_db_instance(
+    rds: Any, resource: ComposedResource, spec: dict,
+) -> list[DriftFinding]:
+    """Check DBInstance for drift using rds:DescribeDBInstances."""
+    try:
+        resp = rds.describe_db_instances()
+    except Exception as exc:
+        raise DriftError(f"Failed to describe DB instances: {exc}") from exc
+
+    instances = resp.get("DBInstances", [])
+    matched = None
+    for inst in instances:
+        if (
+            inst.get("Engine") == spec.get("engine")
+            and inst.get("DBInstanceClass") == spec.get("dbInstanceClass")
+        ):
+            matched = inst
+            break
+
+    if matched is None:
+        return [_resource_missing_finding(resource)]
+
+    observed = {
+        "engine": matched.get("Engine", ""),
+        "dbInstanceClass": matched.get("DBInstanceClass", ""),
+        "storageEncrypted": matched.get("StorageEncrypted", False),
+        "publiclyAccessible": matched.get("PubliclyAccessible", False),
+    }
+    desired = {k: v for k, v in spec.items() if k in observed}
+    mismatches = compare_fields(desired, observed)
+    return _make_findings(resource, mismatches, matched.get("DBInstanceArn", ""))
+
+
+def _check_db_subnet_group(
+    rds: Any, resource: ComposedResource, spec: dict,
+) -> list[DriftFinding]:
+    """Check DBSubnetGroup for drift using rds:DescribeDBSubnetGroups."""
+    group_name = spec.get("dbSubnetGroupName", resource.name)
+
+    try:
+        resp = rds.describe_db_subnet_groups(DBSubnetGroupName=group_name)
+    except Exception as exc:
+        err_str = str(exc)
+        if "DBSubnetGroupNotFoundFault" in err_str:
+            return [_resource_missing_finding(resource)]
+        raise DriftError(
+            f"Failed to describe DBSubnetGroup '{group_name}': {exc}"
+        ) from exc
+
+    groups = resp.get("DBSubnetGroups", [])
+    if not groups:
+        return [_resource_missing_finding(resource)]
+
+    group = groups[0]
+    group_arn = group.get("DBSubnetGroupArn", "")
+
+    # Compare subnet IDs if specified
+    desired_subnets = sorted(spec.get("subnetIds", []))
+    observed_subnets = sorted(
+        s.get("SubnetIdentifier", "") for s in group.get("Subnets", [])
+    )
+
+    mismatches: list[dict[str, str]] = []
+    if desired_subnets and desired_subnets != observed_subnets:
+        mismatches.append({
+            "path": "spec.forProvider.subnetIds",
+            "desired": str(desired_subnets),
+            "observed": str(observed_subnets),
+        })
+
+    # Compare description
+    desired_desc = spec.get("description", "")
+    observed_desc = group.get("DBSubnetGroupDescription", "")
+    if desired_desc and desired_desc != observed_desc:
+        mismatches.append({
+            "path": "spec.forProvider.description",
+            "desired": desired_desc,
+            "observed": observed_desc,
+        })
+
+    return _make_findings(resource, mismatches, group_arn)
+
+
+def _check_db_parameter_group(
+    rds: Any, resource: ComposedResource, spec: dict,
+) -> list[DriftFinding]:
+    """Check DBParameterGroup for drift using rds:DescribeDBParameterGroups."""
+    group_name = spec.get("dbParameterGroupName", resource.name)
+
+    try:
+        resp = rds.describe_db_parameter_groups(DBParameterGroupName=group_name)
+    except Exception as exc:
+        err_str = str(exc)
+        if "DBParameterGroupNotFound" in err_str:
+            return [_resource_missing_finding(resource)]
+        raise DriftError(
+            f"Failed to describe DBParameterGroup '{group_name}': {exc}"
+        ) from exc
+
+    groups = resp.get("DBParameterGroups", [])
+    if not groups:
+        return [_resource_missing_finding(resource)]
+
+    group = groups[0]
+    group_arn = group.get("DBParameterGroupArn", "")
+
+    mismatches: list[dict[str, str]] = []
+    desired_family = spec.get("family", "")
+    observed_family = group.get("DBParameterGroupFamily", "")
+    if desired_family and desired_family != observed_family:
+        mismatches.append({
+            "path": "spec.forProvider.family",
+            "desired": desired_family,
+            "observed": observed_family,
+        })
+
+    return _make_findings(resource, mismatches, group_arn)
+
+
+def check_iam(session: Any, resources: list[ComposedResource]) -> list[DriftFinding]:
+    """Check IAM Role and Policy resources for drift."""
+    findings: list[DriftFinding] = []
+    iam = session.client("iam")
+
+    for r in resources:
+        spec = r.spec.get("forProvider", {})
+
+        if r.kind == "Role":
+            findings.extend(_check_iam_role(iam, r, spec))
+        elif r.kind == "Policy":
+            findings.extend(_check_iam_policy(iam, r, spec))
+
+    return findings
+
+
+def _check_iam_role(
+    iam: Any, resource: ComposedResource, spec: dict,
+) -> list[DriftFinding]:
+    """Check IAM Role for drift using iam:GetRole + iam:ListAttachedRolePolicies."""
+    role_name = spec.get("roleName", resource.name)
+    findings: list[DriftFinding] = []
+
+    try:
+        resp = iam.get_role(RoleName=role_name)
+    except Exception as exc:
+        if "NoSuchEntity" in str(exc):
+            return [_resource_missing_finding(resource)]
+        raise DriftError(f"Failed to get IAM role {role_name}: {exc}") from exc
+
+    role = resp.get("Role", {})
+    role_arn = role.get("Arn", "")
+
+    # Compare trust policy
+    desired_trust = spec.get("assumeRolePolicyDocument", "")
+    if desired_trust:
+        observed_trust = role.get("AssumeRolePolicyDocument", "")
+        desired_normalized = _normalize_json_str(
+            desired_trust if isinstance(desired_trust, str)
+            else json.dumps(desired_trust, sort_keys=True)
+        )
+        observed_normalized = _normalize_json_str(
+            json.dumps(observed_trust, sort_keys=True)
+            if isinstance(observed_trust, dict)
+            else str(observed_trust)
+        )
+
+        if desired_normalized != observed_normalized:
+            findings.append(DriftFinding(
+                layer=4,
+                rule="drift/iam-trust-policy",
+                resource=resource.name,
+                path="spec.forProvider.assumeRolePolicyDocument",
+                severity=Severity.CRITICAL,
+                message=(
+                    f"IAM role '{role_name}' trust policy differs "
+                    "from composition."
+                ),
+                remediation=(
+                    "Update the IAM role trust policy or the "
+                    "composition to match."
+                ),
+                desired=desired_normalized[:200],
+                observed=observed_normalized[:200],
+                resource_arn=role_arn,
+            ))
+
+    # iam:ListAttachedRolePolicies — check managed policy attachments
+    try:
+        attached_resp = iam.list_attached_role_policies(RoleName=role_name)
+        attached_arns = sorted(
+            p["PolicyArn"]
+            for p in attached_resp.get("AttachedPolicies", [])
+        )
+    except Exception:
+        attached_arns = []
+
+    desired_attached = sorted(spec.get("managedPolicyArns", []))
+    if desired_attached and desired_attached != attached_arns:
+        findings.append(DriftFinding(
+            layer=4,
+            rule="drift/iam-attached-policies",
+            resource=resource.name,
+            path="spec.forProvider.managedPolicyArns",
+            severity=Severity.CRITICAL,
+            message=(
+                f"IAM role '{role_name}' attached managed policies "
+                "differ from composition."
+            ),
+            remediation=(
+                "Attach or detach managed policies to match the "
+                "composition declaration."
+            ),
+            desired=str(desired_attached)[:200],
+            observed=str(attached_arns)[:200],
+            resource_arn=role_arn,
         ))
 
     return findings
 
 
-def check_iam(session: Any, resources: list[ComposedResource]) -> list[DriftFinding]:
-    """Check IAM Role resources for drift."""
-    findings: list[DriftFinding] = []
-    iam = session.client("iam")
+def _check_iam_policy(
+    iam: Any, resource: ComposedResource, spec: dict,
+) -> list[DriftFinding]:
+    """Check IAM Policy inline document using iam:GetRolePolicy (for inline)
+    or by comparing the policy document directly."""
+    # Crossplane IAM Policy resources carry the policy JSON in spec.forProvider.policy
+    desired_doc = spec.get("policy", "")
+    if not desired_doc:
+        return []
 
-    for r in resources:
-        if r.kind != "Role":
-            continue
+    # For managed policies, compare via the policy ARN
+    policy_name = spec.get("name", resource.name)
+    role_name = spec.get("roleName", "")
 
-        spec = r.spec.get("forProvider", {})
-        role_name = spec.get("roleName", r.name)
+    if not role_name:
+        # Without a role name we cannot call GetRolePolicy; skip
+        return []
 
-        try:
-            resp = iam.get_role(RoleName=role_name)
-        except iam.exceptions.NoSuchEntityException:
-            findings.append(_resource_missing_finding(r))
-            continue
-        except Exception as exc:
-            raise DriftError(f"Failed to get IAM role {role_name}: {exc}") from exc
+    try:
+        resp = iam.get_role_policy(RoleName=role_name, PolicyName=policy_name)
+    except Exception as exc:
+        if "NoSuchEntity" in str(exc):
+            return [_resource_missing_finding(resource)]
+        raise DriftError(
+            f"Failed to get role policy '{policy_name}' for role "
+            f"'{role_name}': {exc}"
+        ) from exc
 
-        role = resp.get("Role", {})
+    observed_doc = resp.get("PolicyDocument", "")
+    desired_normalized = _normalize_json_str(desired_doc)
+    observed_normalized = _normalize_json_str(
+        json.dumps(observed_doc, sort_keys=True)
+        if isinstance(observed_doc, dict)
+        else str(observed_doc)
+    )
 
-        # Compare trust policy if specified
-        desired_trust = spec.get("assumeRolePolicyDocument", "")
-        if desired_trust:
-            observed_trust = role.get("AssumeRolePolicyDocument", "")
-            if isinstance(observed_trust, dict):
-                import json
+    if desired_normalized != observed_normalized:
+        return [DriftFinding(
+            layer=4,
+            rule="drift/iam-role-policy",
+            resource=resource.name,
+            path="spec.forProvider.policy",
+            severity=Severity.CRITICAL,
+            message=(
+                f"Inline policy '{policy_name}' on role '{role_name}' "
+                "differs from composition."
+            ),
+            remediation="Update the inline policy or the composition to match.",
+            desired=desired_normalized[:200],
+            observed=observed_normalized[:200],
+            resource_arn="",
+        )]
 
-                observed_trust = json.dumps(observed_trust, sort_keys=True)
-            if isinstance(desired_trust, str):
-                import json
+    return []
 
-                try:
-                    desired_trust = json.dumps(json.loads(desired_trust), sort_keys=True)
-                except (json.JSONDecodeError, TypeError):
-                    pass
 
-            if desired_trust != observed_trust:
-                findings.append(DriftFinding(
-                    layer=4,
-                    rule="drift/iam-trust-policy",
-                    resource=r.name,
-                    path="spec.forProvider.assumeRolePolicyDocument",
-                    severity=Severity.CRITICAL,
-                    message=f"IAM role '{role_name}' trust policy differs from composition.",
-                    remediation="Update the IAM role trust policy or the composition to match.",
-                    desired=desired_trust[:200],
-                    observed=str(observed_trust)[:200],
-                    resource_arn=role.get("Arn", ""),
-                ))
+# ────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────
 
-    return findings
+
+def _normalize_json_str(value: str | Any) -> str:
+    """Normalize a JSON string for comparison by re-serializing with sorted keys."""
+    if not isinstance(value, str):
+        value = str(value)
+    try:
+        return json.dumps(json.loads(value), sort_keys=True)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return value
