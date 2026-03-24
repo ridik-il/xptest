@@ -334,7 +334,12 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         save_baseline,
     )
     from xptest.exploration.fault_injection import run_fault_injection
-    from xptest.exploration.input_synthesis import generate_seed_suite
+    from xptest.exploration.input_synthesis import (
+        _extract_parameters,
+        _read_xrd,
+        extend_suite,
+        generate_seed_suite,
+    )
     from xptest.exploration.invariants import (
         check_deletion_policy_escalation,
         check_minimum_resource_count,
@@ -482,6 +487,56 @@ def _cmd_explore(args: argparse.Namespace) -> int:
 
     # Phase 6: Template coverage (requires Go helper)
     coverage_report = measure_coverage("", [])  # placeholder until Go helper exists
+
+    # Phase 6b: Coverage-guided extension (extend_suite)
+    if (
+        not use_explicit_xr
+        and coverage_report.uncovered
+        and first_obj is not None
+    ):
+        xrd_doc = _read_xrd(args.xrd)
+        xrd_spec_schema = (
+            xrd_doc.get("spec", {})
+            .get("versions", [{}])[0]
+            .get("schema", {})
+            .get("openAPIV3Schema", {})
+            .get("properties", {})
+            .get("spec", {})
+        )
+        params = _extract_parameters(xrd_spec_schema)
+        uncovered_ids = [b.branch_id for b in coverage_report.uncovered]
+        extensions = extend_suite(candidates, uncovered_ids, params)
+        if extensions:
+            sys.stderr.write(
+                f"xptest explore: extending suite with {len(extensions)} "
+                f"coverage-guided input(s)\n"
+            )
+            for idx, (label, xr_doc) in enumerate(extensions):
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".yaml", delete=False
+                ) as fh:
+                    yaml.safe_dump(xr_doc, fh, sort_keys=False)
+                    ext_xr_path = fh.name
+                try:
+                    obj = load(
+                        composition_path=args.composition,
+                        xrd_path=args.xrd,
+                        crd_bundle_path=cfg.crd_bundle_path,
+                        xr_path=ext_xr_path,
+                        functions_path=args.functions,
+                        observed_resources_path=args.observed_resources,
+                        environment_config_paths=cfg.environment_config_paths,
+                    )
+                    case_id = f"extend-{idx}:{label}"
+                    input_flat = flatten_input_spec(xr_doc.get("spec", {}), "spec")
+                    snapshot = build_snapshot(obj, case_id=case_id, input_flat=input_flat)
+                    snapshots.append(snapshot)
+                except LoadError as exc:
+                    sys.stderr.write(
+                        f"xptest: extend render error ({label}) — {exc}\n"
+                    )
+                finally:
+                    Path(ext_xr_path).unlink(missing_ok=True)
 
     # Phase 7: Save baseline if requested
     if args.save_baseline and first_obj is not None:

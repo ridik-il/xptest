@@ -17,6 +17,27 @@ class ValidationRunResult:
     halted_layer: int | None = None
 
 
+def apply_severity_overrides(
+    findings: list[Finding],
+    overrides: dict[str, str],
+) -> list[Finding]:
+    """Apply config severity overrides to any list of findings.
+
+    Mutates findings in place and returns the same list for convenience.
+    This enables severity overrides for L1/L2 findings (not just L3).
+    """
+    if not overrides:
+        return findings
+    for f in findings:
+        override = overrides.get(f.rule)
+        if override:
+            try:
+                f.severity = Severity(override.upper())
+            except ValueError:
+                pass
+    return findings
+
+
 def run_validations(
     obj: CompositionObject,
     cfg: Config,
@@ -25,11 +46,13 @@ def run_validations(
     findings: list[Finding] = []
 
     l1_findings = layer1.run(obj)
+    apply_severity_overrides(l1_findings, cfg.severity_overrides)
     findings.extend(l1_findings)
     if halt_on_critical and _has_critical(l1_findings):
         return ValidationRunResult(findings=findings, halted_layer=1)
 
     l2_findings = layer2.run(obj)
+    apply_severity_overrides(l2_findings, cfg.severity_overrides)
     findings.extend(l2_findings)
     if halt_on_critical and _has_critical(l2_findings):
         return ValidationRunResult(findings=findings, halted_layer=2)

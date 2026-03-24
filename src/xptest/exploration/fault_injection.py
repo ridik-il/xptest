@@ -205,3 +205,34 @@ def run_fault_injection(
             Path(fault_path).unlink(missing_ok=True)
 
     return findings, fault_snapshots
+
+
+def compute_mutation_score(
+    total_faults_injected: int,
+    findings: list[Finding],
+) -> dict[str, Any]:
+    """Compute mutation score metric (§3.3.4).
+
+    mutation_score = faults_detected / faults_injected
+
+    A fault is "detected" if a finding was emitted for it
+    (rule starts with "fi/" or "inv/").
+    """
+    if total_faults_injected == 0:
+        return {
+            "faults_injected": 0,
+            "faults_detected": 0,
+            "mutation_score": 1.0,
+        }
+
+    detected = sum(
+        1 for f in findings
+        if f.rule.startswith("fi/") or f.rule.startswith("inv/")
+    )
+    score = detected / total_faults_injected
+
+    return {
+        "faults_injected": total_faults_injected,
+        "faults_detected": detected,
+        "mutation_score": round(score, 4),
+    }

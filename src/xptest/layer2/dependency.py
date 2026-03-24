@@ -8,8 +8,8 @@ Checks performed (no AWS credentials, no live cluster required):
          the composition.
   L2-04  Missing readiness gate: a resource that is a dependency producer has no
          readinessCheck defined.
-  L2-05  Cross-composition ordering stub (deferred — multi-composition support
-         is out of scope for Phase 1).
+  L2-05  Cross-composition ordering: validate dependency manifest declaring
+         explicit inter-composition edges (Decision 6).
 
 Edge-creating patch types (confirmed U3):
   - FromCompositeFieldPath   — when fromFieldPath starts with "status.atProvider."
@@ -374,3 +374,133 @@ def _load_atprovider_schemas(bundle: Path) -> dict[tuple[str, str], set[str]]:
         except Exception:  # noqa: BLE001
             continue
     return result
+
+
+# ---------------------------------------------------------------------------
+# L2-05 — Cross-composition ordering (Decision 6)
+# ---------------------------------------------------------------------------
+
+
+def check_cross_composition_ordering(
+    manifest_path: str,
+) -> list[Finding]:
+    """Validate a dependency manifest that declares cross-composition edges.
+
+    Manifest YAML structure:
+        compositions:
+          - name: network-comp
+            provides:
+              - vpc-id
+              - subnet-ids
+          - name: database-comp
+            depends_on:
+              - network-comp
+            consumes:
+              - vpc-id
+              - subnet-ids
+
+    Checks:
+      - Every depends_on target must exist as a composition name.
+      - Every consumed output must be provided by a declared dependency.
+      - No cycles in the cross-composition dependency graph.
+    """
+    p = Path(manifest_path)
+    if not p.exists():
+        return []
+
+    try:
+        with p.open() as fh:
+            doc = yaml.safe_load(fh)
+    except Exception:  # noqa: BLE001
+        return [Finding(
+            layer=2,
+            rule="L2-05/manifest-parse-error",
+            resource="",
+            path=manifest_path,
+            severity=Severity.CRITICAL,
+            message=f"Failed to parse dependency manifest at '{manifest_path}'.",
+            remediation="Ensure the manifest is valid YAML.",
+        )]
+
+    if not isinstance(doc, dict):
+        return []
+
+    compositions: list[dict[str, Any]] = doc.get("compositions", [])
+    if not compositions:
+        return []
+
+    findings: list[Finding] = []
+    known_names: set[str] = set()
+    provides_map: dict[str, set[str]] = {}
+
+    for comp in compositions:
+        name = comp.get("name", "")
+        if name:
+            known_names.add(name)
+            provides_map[name] = set(comp.get("provides", []))
+
+    # Check depends_on references and consumed outputs
+    graph: dict[str, set[str]] = {name: set() for name in known_names}
+    for comp in compositions:
+        comp_name = comp.get("name", "")
+        depends_on: list[str] = comp.get("depends_on", [])
+        consumes: list[str] = comp.get("consumes", [])
+
+        for dep in depends_on:
+            if dep not in known_names:
+                findings.append(Finding(
+                    layer=2,
+                    rule="L2-05/unknown-composition-dependency",
+                    resource=comp_name,
+                    path=f"depends_on[{dep}]",
+                    severity=Severity.CRITICAL,
+                    message=(
+                        f"Composition '{comp_name}' depends on '{dep}' "
+                        "which is not declared in the dependency manifest."
+                    ),
+                    remediation="Add the missing composition to the manifest.",
+                ))
+            else:
+                graph.setdefault(comp_name, set()).add(dep)
+
+        for consumed in consumes:
+            # Check that at least one dependency provides this output
+            provided_by_deps = False
+            for dep in depends_on:
+                if dep in provides_map and consumed in provides_map[dep]:
+                    provided_by_deps = True
+                    break
+            if not provided_by_deps:
+                findings.append(Finding(
+                    layer=2,
+                    rule="L2-05/unresolved-cross-composition-output",
+                    resource=comp_name,
+                    path=f"consumes[{consumed}]",
+                    severity=Severity.WARNING,
+                    message=(
+                        f"Composition '{comp_name}' consumes output '{consumed}' "
+                        "but no declared dependency provides it."
+                    ),
+                    remediation=(
+                        "Add the providing composition to depends_on "
+                        "or add the output to the provider's provides list."
+                    ),
+                ))
+
+    # Cycle detection
+    try:
+        sorter = graphlib.TopologicalSorter(graph)
+        list(sorter.static_order())
+    except graphlib.CycleError as exc:
+        cycle_info = str(exc)
+        findings.append(Finding(
+            layer=2,
+            rule="L2-05/cross-composition-cycle",
+            resource="",
+            path="compositions",
+            severity=Severity.CRITICAL,
+            message=f"Cycle detected in cross-composition dependencies: {cycle_info}",
+            remediation="Break the dependency cycle between compositions.",
+        ))
+
+    return findings

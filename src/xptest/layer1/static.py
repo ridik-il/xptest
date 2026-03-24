@@ -43,6 +43,7 @@ def run(obj: CompositionObject) -> list[Finding]:
     findings.extend(_check_provider_lock(obj))
     findings.extend(_check_patch_field_paths(obj))
     findings.extend(_check_environment_config_present(obj))
+    findings.extend(_check_deprecated_fields(obj))
     if obj.crd_bundle_path:
         findings.extend(_check_schema(obj))
     return findings
@@ -232,6 +233,73 @@ def _check_environment_config_present(obj: CompositionObject) -> list[Finding]:
             ),
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# L1-05 — Deprecated field detection
+# ---------------------------------------------------------------------------
+
+# Known deprecated fields per (apiVersion-prefix, kind).
+# Keys: (apiVersion prefix, kind, dot-path from spec.forProvider).
+# Extended per provider bundle release.
+_DEPRECATED_FIELDS: list[tuple[str, str, str, str]] = [
+    # AWS provider deprecated fields
+    ("aws.upbound.io", "SecurityGroup", "spec.forProvider.ingress",
+     "Use SecurityGroupRule resources instead of inline ingress rules."),
+    ("aws.upbound.io", "SecurityGroup", "spec.forProvider.egress",
+     "Use SecurityGroupRule resources instead of inline egress rules."),
+    ("ec2.aws.upbound.io", "SecurityGroup", "spec.forProvider.ingress",
+     "Use SecurityGroupRule resources instead of inline ingress rules."),
+    ("ec2.aws.upbound.io", "SecurityGroup", "spec.forProvider.egress",
+     "Use SecurityGroupRule resources instead of inline egress rules."),
+    ("s3.aws.upbound.io", "Bucket", "spec.forProvider.acl",
+     "Use BucketAcl resource instead of inline acl field."),
+    ("aws.upbound.io", "Bucket", "spec.forProvider.acl",
+     "Use BucketAcl resource instead of inline acl field."),
+]
+
+
+def _check_deprecated_fields(obj: CompositionObject) -> list[Finding]:
+    """Detect usage of deprecated fields in composed resource specs.
+
+    Design ref: framework-design.md §3.1, L1-05.
+    Checks spec.forProvider fields against a known-deprecated registry.
+    """
+    findings: list[Finding] = []
+    for res in obj.resources:
+        for api_prefix, kind, field_path, remedy in _DEPRECATED_FIELDS:
+            if not res.api_version.startswith(api_prefix):
+                continue
+            if res.kind != kind:
+                continue
+            # Navigate the dot-path to check if field is present
+            if _field_exists(res.spec, field_path.removeprefix("spec.")):
+                findings.append(Finding(
+                    layer=1,
+                    rule="L1-05/deprecated-field",
+                    resource=res.name,
+                    path=field_path,
+                    severity=Severity.WARNING,
+                    message=(
+                        f"Resource '{res.name}' ({res.api_version}/{res.kind}) "
+                        f"uses deprecated field '{field_path}'."
+                    ),
+                    remediation=remedy,
+                ))
+    return findings
+
+
+def _field_exists(spec: dict[str, Any], dot_path: str) -> bool:
+    """Check if a dot-separated path exists in a nested dict."""
+    parts = dot_path.split(".")
+    current: Any = spec
+    for part in parts:
+        if not isinstance(current, dict):
+            return False
+        if part not in current:
+            return False
+        current = current[part]
+    return True
 
 
 # ---------------------------------------------------------------------------

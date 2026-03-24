@@ -42,6 +42,9 @@ def save_baseline(
                 "external-name": _extract_external_name(node.spec),
                 "deletionPolicy": _extract_deletion_policy(node.spec),
                 "managementPolicies": _extract_management_policies(node.spec),
+                "position": len(resources),
+                "apiVersion": node.api_version,
+                "kind": node.kind,
             })
 
     baseline = {
@@ -113,6 +116,60 @@ def detect_breaking_changes(
                 finding_id="bc/resource-removed",
                 category="breaking-change",
             ))
+
+    # bc/identity-change: composition-resource-name changed for same position
+    # Build position map from first non-fault snapshot
+    non_fault_snapshots = [
+        s for s in current_snapshots if "fault|" not in s.case_id
+    ]
+    if non_fault_snapshots:
+        first_snapshot = non_fault_snapshots[0]
+        current_positions: dict[int, dict[str, str]] = {}
+        for idx, node in enumerate(first_snapshot.resources):
+            current_positions[idx] = {
+                "name": node.name,
+                "apiVersion": node.api_version,
+                "kind": node.kind,
+            }
+
+        for base_res_entry in baseline.get("resources", []):
+            pos = base_res_entry.get("position")
+            if pos is None:
+                continue
+            base_name = base_res_entry.get("composition-resource-name", "")
+            base_av = base_res_entry.get("apiVersion", "")
+            base_kind = base_res_entry.get("kind", "")
+
+            curr = current_positions.get(pos)
+            if curr is None:
+                continue
+
+            # Same position, different name or GVK = identity change
+            name_changed = curr["name"] != base_name and base_name
+            gvk_changed = (
+                (base_av and curr["apiVersion"] != base_av)
+                or (base_kind and curr["kind"] != base_kind)
+            )
+            if name_changed or gvk_changed:
+                findings.append(Finding(
+                    layer=7,
+                    rule="bc/identity-change",
+                    resource=base_name,
+                    path=f"position[{pos}]",
+                    severity=Severity.CRITICAL,
+                    message=(
+                        f"Template position {pos} changed identity: "
+                        f"baseline='{base_name}' ({base_av}/{base_kind}), "
+                        f"current='{curr['name']}' ({curr['apiVersion']}/{curr['kind']})."
+                    ),
+                    remediation=(
+                        "A resource identity change at the same template position "
+                        "may cause Crossplane to delete the old resource and create "
+                        "a new one. Update baseline after confirming intent."
+                    ),
+                    finding_id="bc/identity-change",
+                    category="breaking-change",
+                ))
 
     # Per-resource rules for resources present in both baseline and renders
     for name in rendered_names & set(baseline_resources.keys()):

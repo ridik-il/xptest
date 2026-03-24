@@ -305,6 +305,83 @@ def _unhash(h: Any, domain: list[Any]) -> Any:
     return domain[0] if domain else None
 
 
+def compute_tway_coverage(
+    candidates: list[tuple[str, dict[str, Any]]],
+    params: list[tuple[str, list[Any]]],
+    t: int = 2,
+) -> dict[str, Any]:
+    """Compute t-way input coverage metric (§3.3.4).
+
+    Returns:
+        {
+            "t": 2,
+            "total_tuples": N,
+            "covered_tuples": M,
+            "coverage_pct": M/N * 100,
+        }
+    """
+    if not params or not candidates or t < 2:
+        return {"t": t, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0}
+
+    names = [name for name, _ in params]
+    domains = [domain for _, domain in params]
+    n = len(params)
+
+    if t > n:
+        t = n
+
+    # Enumerate all t-tuples of parameter indices
+    from itertools import combinations
+
+    param_combos = list(combinations(range(n), t))
+
+    # Build set of all required value tuples
+    total_tuples: set[tuple[Any, ...]] = set()
+    for indices in param_combos:
+        value_lists = [domains[i] for i in indices]
+        for combo in _cartesian(value_lists):
+            key = tuple((indices[k], _hashable(combo[k])) for k in range(t))
+            total_tuples.add(key)
+
+    # Check which tuples are covered by candidates
+    covered: set[tuple[Any, ...]] = set()
+    for _label, xr_doc in candidates:
+        spec = xr_doc.get("spec", {})
+        for indices in param_combos:
+            vals = []
+            skip = False
+            for i in indices:
+                if names[i] not in spec:
+                    skip = True
+                    break
+                vals.append(spec[names[i]])
+            if skip:
+                continue
+            key = tuple((indices[k], _hashable(vals[k])) for k in range(t))
+            covered.add(key)
+
+    total = len(total_tuples)
+    covered_count = len(covered & total_tuples)
+    pct = (covered_count / total * 100) if total > 0 else 100.0
+
+    return {
+        "t": t,
+        "total_tuples": total,
+        "covered_tuples": covered_count,
+        "coverage_pct": round(pct, 2),
+    }
+
+
+def _cartesian(lists: list[list[Any]]) -> list[list[Any]]:
+    """Cartesian product of lists (avoids importing itertools.product)."""
+    if not lists:
+        return [[]]
+    result: list[list[Any]] = [[]]
+    for pool in lists:
+        result = [x + [y] for x in result for y in pool]
+    return result
+
+
 def _next_domain_value(current: Any, domain: list[Any]) -> Any | None:
     """Pick the next domain value different from current."""
     for v in domain:
