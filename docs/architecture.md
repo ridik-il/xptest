@@ -20,17 +20,17 @@ xptest implements a four-layer sequential validation pipeline, a pull-based drif
          │ (L1-01   │  Schema, field paths │
          │  ..L1-05)│  duplicates, lock    │
          └────┬────┘                       │
-              │  halt if CRITICAL           │
+              │  halt if CRITICAL          │
          ┌────┴────┐                       │
-         │ Layer 2  │  Dependency Valid.    │
+         │ Layer 2  │  Dependency Valid.   │
          │ (L2-01   │  Graph, cycles,      │
          │  ..L2-05)│  dangling, readiness │
          └────┬────┘                       │
-              │  halt if CRITICAL           │
+              │  halt if CRITICAL          │
          ┌────┴────┐                       │
          │ Layer 3  │  Policy Compliance   │
          │  (OPA)   │  13 Rego rules,      │
-         │          │  full-document eval   │
+         │          │  full-document eval  │
          └────┬────┘                       │
               │                            │
          ┌────┴────┐                       │
