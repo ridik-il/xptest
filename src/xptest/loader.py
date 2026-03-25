@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 
-from xptest.models import ComposedResource, CompositionMode, CompositionObject
+from xptest.models import ComposedResource, CompositionMode, CompositionObject, RenderMode
 
 
 class LoadError(ValueError):
@@ -39,8 +39,16 @@ def load(
     functions_path: str | None = None,
     observed_resources_path: str | None = None,
     environment_config_paths: list[str] | None = None,
+    render_mode: str = "auto",
 ) -> CompositionObject:
-    """Parse a Composition + XRD YAML pair into a CompositionObject."""
+    """Parse a Composition + XRD YAML pair into a CompositionObject.
+
+    Args:
+        render_mode: How to handle pipeline-mode go-templating compositions.
+            "auto" — try real render via crossplane CLI, fall back to degraded
+            "render" — require real render, fail if unavailable
+            "offline" — always use offline parsing (degraded for go-templating)
+    """
     comp_doc = _read_yaml(composition_path)
     xrd_doc = _read_yaml(xrd_path)
 
@@ -56,14 +64,20 @@ def load(
         )
     mode = CompositionMode(raw_mode)
 
-    if xr_path and functions_path:
-        xrd_spec = xrd_doc.get("spec", {})
-        xrd_group = xrd_spec.get("group", "")
-        xrd_kind = xrd_spec.get("names", {}).get("kind", "")
-        xrd_versions = xrd_spec.get("versions", [])
-        xrd_version = xrd_versions[0].get("name", "") if xrd_versions else ""
-        xrd_api_version = f"{xrd_group}/{xrd_version}" if xrd_group and xrd_version else ""
+    xrd_spec = xrd_doc.get("spec", {})
+    xrd_group = xrd_spec.get("group", "")
+    xrd_kind = xrd_spec.get("names", {}).get("kind", "")
+    xrd_versions = xrd_spec.get("versions", [])
+    xrd_version = xrd_versions[0].get("name", "") if xrd_versions else ""
+    xrd_api_version = (
+        f"{xrd_group}/{xrd_version}" if xrd_group and xrd_version else ""
+    )
 
+    resources: list[ComposedResource] = []
+    actual_render_mode = RenderMode.STATIC_PARSE
+
+    if xr_path and functions_path:
+        # Explicit render inputs provided — always use crossplane render
         resources = _parse_from_render(
             composition_path=composition_path,
             xr_path=xr_path,
@@ -73,11 +87,22 @@ def load(
             xrd_api_version=xrd_api_version,
             xrd_kind=xrd_kind,
         )
-    else:
-        resources = (
-            _parse_resources_mode(spec, composition_path)
-            if mode == CompositionMode.RESOURCES
-            else _parse_pipeline_mode(spec, composition_path)
+        actual_render_mode = RenderMode.RENDER
+    elif mode == CompositionMode.RESOURCES:
+        resources = _parse_resources_mode(spec, composition_path)
+        actual_render_mode = RenderMode.STATIC_PARSE
+    elif mode == CompositionMode.PIPELINE:
+        resources, actual_render_mode = _load_pipeline_resources(
+            composition_path=composition_path,
+            xrd_path=xrd_path,
+            comp_doc=comp_doc,
+            spec=spec,
+            functions_path=functions_path,
+            environment_config_paths=environment_config_paths or [],
+            observed_resources_path=observed_resources_path,
+            xrd_api_version=xrd_api_version,
+            xrd_kind=xrd_kind,
+            render_mode=render_mode,
         )
 
     return CompositionObject(
@@ -90,7 +115,148 @@ def load(
         xrd_spec=xrd_doc.get("spec", {}),
         crd_bundle_path=crd_bundle_path,
         environment_config_paths=environment_config_paths or [],
+        render_mode=actual_render_mode,
     )
+
+
+def _load_pipeline_resources(
+    composition_path: str,
+    xrd_path: str,
+    comp_doc: dict[str, Any],
+    spec: dict[str, Any],
+    functions_path: str | None,
+    environment_config_paths: list[str],
+    observed_resources_path: str | None,
+    xrd_api_version: str,
+    xrd_kind: str,
+    render_mode: str,
+) -> tuple[list[ComposedResource], RenderMode]:
+    """Load resources from a pipeline-mode composition.
+
+    For compositions with go-templating steps, tries real rendering
+    first (unless render_mode="offline"), then falls back to degraded
+    offline parsing.
+
+    Returns (resources, render_mode_used).
+    """
+    from xptest.render import (
+        RenderError,
+        RenderUnavailable,
+        auto_render_pipeline,
+        has_go_templating_steps,
+    )
+
+    uses_go_templates = has_go_templating_steps(comp_doc)
+
+    # If no go-templating, static parse works fine for PaT steps
+    if not uses_go_templates:
+        return _parse_pipeline_mode(spec, composition_path), RenderMode.STATIC_PARSE
+
+    # For go-templating compositions, try real render
+    if render_mode != "offline":
+        try:
+            rendered = auto_render_pipeline(
+                composition_path=composition_path,
+                xrd_path=xrd_path,
+                functions_path=functions_path,
+                environment_config_paths=environment_config_paths,
+                observed_resources_path=observed_resources_path,
+            )
+            resources = _parse_rendered_output(
+                rendered, xrd_api_version, xrd_kind
+            )
+            if resources:
+                return resources, RenderMode.RENDER
+        except RenderUnavailable:
+            if render_mode == "render":
+                raise LoadError(
+                    f"{composition_path}: composition uses go-templating but "
+                    "crossplane CLI is not available for rendering. "
+                    "Install the Crossplane CLI and Docker, or use "
+                    "--render-mode=auto to allow degraded offline parsing."
+                ) from None
+            # Fall through to degraded parse
+        except RenderError as exc:
+            if render_mode == "render":
+                raise LoadError(
+                    f"{composition_path}: crossplane render failed: "
+                    f"{exc}. stderr: {exc.stderr}"
+                ) from None
+            # Fall through to degraded parse
+
+    # Degraded offline parse: strip templates and parse what we can.
+    # This is the legacy behavior — it works for simple templates but
+    # fails on conditionals, ranges, and structural template expressions.
+    import sys
+
+    sys.stderr.write(
+        f"xptest: WARNING — '{composition_path}' uses go-templating but "
+        "rendering is unavailable. Using degraded offline parse; "
+        "results may be incomplete or incorrect. "
+        "Install crossplane CLI + Docker for accurate analysis.\n"
+    )
+    try:
+        resources = _parse_pipeline_mode(spec, composition_path)
+        return resources, RenderMode.DEGRADED_PARSE
+    except (LoadError, yaml.YAMLError):
+        # Even degraded parse failed — return empty with clear error
+        sys.stderr.write(
+            f"xptest: WARNING — degraded offline parse also failed for "
+            f"'{composition_path}'. Go template expressions produced "
+            "invalid YAML. No resources could be extracted.\n"
+        )
+        return [], RenderMode.DEGRADED_PARSE
+
+
+def _parse_rendered_output(
+    rendered_yaml: str,
+    xrd_api_version: str,
+    xrd_kind: str,
+) -> list[ComposedResource]:
+    """Parse crossplane render output into ComposedResource list.
+
+    Filters out the XR itself and control-plane resources, keeping
+    only composed/managed resources.
+    """
+    docs = list(yaml.safe_load_all(rendered_yaml))
+    resources: list[ComposedResource] = []
+
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+
+        api_version = str(doc.get("apiVersion", ""))
+        kind = str(doc.get("kind", ""))
+        if not api_version or not kind:
+            continue
+
+        # Skip control-plane resources
+        if kind in {"Composition", "CompositeResourceDefinition", "Function"}:
+            continue
+        # Skip the rendered XR itself
+        if (
+            xrd_api_version
+            and xrd_kind
+            and api_version == xrd_api_version
+            and kind == xrd_kind
+        ):
+            continue
+
+        metadata = doc.get("metadata", {})
+        name = _rendered_resource_name(metadata)
+        resources.append(
+            ComposedResource(
+                name=name,
+                api_version=api_version,
+                kind=kind,
+                spec=doc.get("spec", {}),
+                patches=[],
+                readiness_checks=[],
+                selector=_extract_selector({"spec": doc.get("spec", {})}),
+            )
+        )
+
+    return resources
 
 
 def _parse_from_render(
@@ -339,6 +505,8 @@ def _parse_go_templating_inline(
         return []
 
     docs = _parse_go_template_to_docs(template)
+    # Extract all field path expressions from the entire template block
+    all_expressions = extract_template_expressions(template)
     resources: list[ComposedResource] = []
 
     for doc_index, doc in enumerate(docs):
@@ -359,6 +527,7 @@ def _parse_go_templating_inline(
                 patches=[],
                 readiness_checks=[],
                 selector=_extract_selector({"spec": doc.get("spec", {})}),
+                template_expressions=all_expressions,
             )
         )
 
@@ -366,6 +535,15 @@ def _parse_go_templating_inline(
 
 
 def _parse_go_template_to_docs(template: str) -> list[dict[str, Any]]:
+    """Degraded Go template parser: strips control lines and replaces expressions.
+
+    WARNING: This is a best-effort offline parser that loses template logic.
+    It works for simple templates where expressions only appear in YAML values,
+    but fails on conditionals that change document structure, ranges that
+    create multiple resources, and expressions in YAML-structural positions.
+
+    For accurate results, use crossplane render (render_mode="render" or "auto").
+    """
     sanitized_lines: list[str] = []
     for line in template.splitlines():
         stripped = line.strip()
@@ -375,9 +553,15 @@ def _parse_go_template_to_docs(template: str) -> list[dict[str, Any]]:
 
     sanitized = "\n".join(sanitized_lines)
     docs: list[dict[str, Any]] = []
-    for doc in yaml.safe_load_all(sanitized):
-        if isinstance(doc, dict):
-            docs.append(doc)
+    try:
+        for doc in yaml.safe_load_all(sanitized):
+            if isinstance(doc, dict):
+                docs.append(doc)
+    except yaml.YAMLError:
+        # Sanitized template produced invalid YAML — this is expected for
+        # complex templates with structural expressions.  Return whatever
+        # documents were successfully parsed before the error.
+        pass
     return docs
 
 
@@ -406,6 +590,35 @@ def _is_go_template_control_line(stripped: str) -> bool:
 
 def _replace_template_expressions(line: str) -> str:
     return re.sub(r"{{[^{}]*}}", "xptest-templated", line)
+
+
+# Regex to extract dot-path expressions from Go templates.
+# Matches patterns like: .observed.composite.resource.spec.forProvider.vpcId
+# or .spec.parameters.region
+_GO_TEMPLATE_DOT_PATH_RE = re.compile(r"\.\w+(?:\.\w+)+")
+
+
+def extract_template_expressions(template: str) -> list[str]:
+    """Extract field path expressions from a Go template string.
+
+    Returns a deduplicated list of dot-paths found in {{ ... }} blocks.
+    These are used by L1-07 to validate that template variables reference
+    real XRD/CRD fields.
+    """
+    expressions: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"{{([^{}]*)}}", template):
+        body = match.group(1).strip()
+        # Skip pure control flow
+        if body.startswith(("if ", "end", "else", "range ", "with ", "/*", "$")):
+            continue
+        # Extract dot-paths from the expression body
+        for path_match in _GO_TEMPLATE_DOT_PATH_RE.finditer(body):
+            path = path_match.group(0).lstrip(".")
+            if path not in seen:
+                seen.add(path)
+                expressions.append(path)
+    return expressions
 
 
 def _go_template_resource_name(

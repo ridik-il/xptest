@@ -18,6 +18,14 @@ class CompositionMode(str, Enum):
     PIPELINE = "Pipeline"
 
 
+class RenderMode(str, Enum):
+    """How composed resources were obtained from the composition."""
+
+    STATIC_PARSE = "static_parse"  # Parsed directly from YAML (Resources mode, PaT)
+    RENDER = "render"  # Rendered through crossplane render (go-templating)
+    DEGRADED_PARSE = "degraded_parse"  # Go template sanitized — may be incomplete
+
+
 @dataclass
 class Finding:
     """A single validation finding emitted by any layer."""
@@ -53,6 +61,8 @@ class ComposedResource:
     readiness_checks: list[dict[str, Any]] = field(default_factory=list)
     # Selector fields (matchLabels / matchControllerRef)
     selector: dict[str, Any] | None = None
+    # Go template expressions extracted from inline templates (field paths, variables)
+    template_expressions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -79,3 +89,6 @@ class CompositionObject:
 
     # EnvironmentConfig fixture paths supplied at load time
     environment_config_paths: list[str] = field(default_factory=list)
+
+    # How resources were obtained (static parse, render, or degraded)
+    render_mode: RenderMode = RenderMode.STATIC_PARSE

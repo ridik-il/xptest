@@ -7,6 +7,7 @@ Checks performed (no AWS credentials, no live cluster required):
   L1-04  Provider lock constraint (apiVersion / kind must exist in the CRD bundle).
   L1-05  Deprecated field detection against known AWS provider deprecated fields.
   L1-06  EnvironmentConfig fixture presence check for FromEnvironmentFieldPath patches.
+  L1-07  Go template variable validation for Pipeline-mode compositions.
 
 Execution target: < 5 seconds for typical compositions.
 """
@@ -19,6 +20,7 @@ from typing import Any
 
 import yaml
 
+from xptest.cache import CrdBundleCache
 from xptest.models import ComposedResource, CompositionObject, Finding, Severity
 
 # A valid Kubernetes/Crossplane field path: dot-separated identifiers.
@@ -37,16 +39,20 @@ _PATCHTYPES_WITH_PATHS = {
 }
 
 
-def run(obj: CompositionObject) -> list[Finding]:
+def run(
+    obj: CompositionObject,
+    crd_cache: CrdBundleCache | None = None,
+) -> list[Finding]:
     """Execute all Layer 1 checks and return findings."""
     findings: list[Finding] = []
     findings.extend(_check_duplicate_names(obj))
-    findings.extend(_check_provider_lock(obj))
+    findings.extend(_check_provider_lock(obj, crd_cache))
     findings.extend(_check_patch_field_paths(obj))
     findings.extend(_check_environment_config_present(obj))
     findings.extend(_check_deprecated_fields(obj))
+    findings.extend(_check_template_variables(obj, crd_cache))
     if obj.crd_bundle_path:
-        findings.extend(_check_schema(obj))
+        findings.extend(_check_schema(obj, crd_cache))
     return findings
 
 
@@ -81,11 +87,14 @@ def _check_duplicate_names(obj: CompositionObject) -> list[Finding]:
 # ---------------------------------------------------------------------------
 
 
-def _check_provider_lock(obj: CompositionObject) -> list[Finding]:
+def _check_provider_lock(
+    obj: CompositionObject,
+    crd_cache: CrdBundleCache | None = None,
+) -> list[Finding]:
     if not obj.crd_bundle_path:
         return []
 
-    known = _load_known_kinds(obj.crd_bundle_path)
+    known = crd_cache.known_kinds if crd_cache else _load_known_kinds(obj.crd_bundle_path)
     findings: list[Finding] = []
     for res in obj.resources:
         key = (res.api_version, res.kind)
@@ -304,22 +313,136 @@ def _field_exists(spec: dict[str, Any], dot_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# L1-07 — Go template variable validation
+# ---------------------------------------------------------------------------
+
+# Known root prefixes in Crossplane Go templates
+_KNOWN_TEMPLATE_ROOTS = {
+    "observed",
+    "desired",
+    "spec",
+    "metadata",
+    "status",
+}
+
+# Sub-paths under observed.composite.resource that should exist
+_OBSERVED_COMPOSITE_PREFIXES = ("observed.composite.resource.",)
+
+
+def _check_template_variables(
+    obj: CompositionObject,
+    crd_cache: CrdBundleCache | None = None,
+) -> list[Finding]:
+    """Validate Go template expressions reference known field paths.
+
+    For Pipeline-mode compositions using function-go-templating, checks that:
+    1. Template expressions use known root objects (observed, desired, spec, etc.)
+    2. Field paths under observed.composite.resource.spec match XRD parameters
+    """
+    findings: list[Finding] = []
+    xrd_params = _extract_xrd_param_names(obj.xrd_spec)
+
+    for res in obj.resources:
+        if not res.template_expressions:
+            continue
+
+        for expr in res.template_expressions:
+            parts = expr.split(".")
+
+            # Check 1: unknown root object
+            if parts[0] not in _KNOWN_TEMPLATE_ROOTS:
+                findings.append(
+                    Finding(
+                        layer=1,
+                        rule="L1-07/unknown-template-root",
+                        resource=res.name,
+                        path=f"template.{expr}",
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Template expression '.{expr}' in resource "
+                            f"'{res.name}' uses unknown root '{parts[0]}'. "
+                            "Expected one of: observed, desired, spec, "
+                            "metadata, status."
+                        ),
+                        remediation=(
+                            "Verify the template variable references a "
+                            "valid Crossplane context object."
+                        ),
+                    )
+                )
+
+            # Check 2: observed.composite.resource.spec.X — validate X against XRD
+            if (
+                xrd_params
+                and expr.startswith("observed.composite.resource.spec.")
+            ):
+                spec_path = expr.removeprefix(
+                    "observed.composite.resource.spec."
+                )
+                top_field = spec_path.split(".")[0]
+                if top_field and top_field not in xrd_params:
+                    findings.append(
+                        Finding(
+                            layer=1,
+                            rule="L1-07/unknown-xrd-parameter",
+                            resource=res.name,
+                            path=f"template.{expr}",
+                            severity=Severity.WARNING,
+                            message=(
+                                f"Template expression '.{expr}' in resource "
+                                f"'{res.name}' references XRD parameter "
+                                f"'{top_field}' which is not declared in the "
+                                "XRD spec schema."
+                            ),
+                            remediation=(
+                                f"Add '{top_field}' to the XRD "
+                                "openAPIV3Schema or fix the template "
+                                "variable name."
+                            ),
+                        )
+                    )
+
+    return findings
+
+
+def _extract_xrd_param_names(xrd_spec: dict[str, Any]) -> set[str]:
+    """Extract top-level parameter names from XRD openAPIV3Schema."""
+    versions = xrd_spec.get("versions", [])
+    if not versions:
+        return set()
+    schema = (
+        versions[0]
+        .get("schema", {})
+        .get("openAPIV3Schema", {})
+        .get("properties", {})
+        .get("spec", {})
+        .get("properties", {})
+    )
+    return set(schema.keys()) if schema else set()
+
+
+# ---------------------------------------------------------------------------
 # L1-01 — Schema validation against CRD bundle
 # ---------------------------------------------------------------------------
 
 
-def _check_schema(obj: CompositionObject) -> list[Finding]:
+def _check_schema(
+    obj: CompositionObject,
+    crd_cache: CrdBundleCache | None = None,
+) -> list[Finding]:
     """Validate each composed resource's spec against its CRD schema."""
     try:
         import jsonschema  # noqa: PLC0415
     except ImportError:
         return []  # jsonschema not installed; skip silently
 
-    bundle = Path(obj.crd_bundle_path)
-    if not bundle.is_dir():
-        return []
-
-    crd_map = _build_crd_map(bundle)
+    if crd_cache:
+        crd_map = crd_cache.crd_schemas
+    else:
+        bundle = Path(obj.crd_bundle_path)
+        if not bundle.is_dir():
+            return []
+        crd_map = _build_crd_map(bundle)
     findings: list[Finding] = []
 
     for res in obj.resources:

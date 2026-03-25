@@ -29,10 +29,14 @@ from typing import Any
 
 import yaml
 
+from xptest.cache import CrdBundleCache
 from xptest.models import CompositionObject, Finding, Severity
 
 
-def run(obj: CompositionObject) -> list[Finding]:
+def run(
+    obj: CompositionObject,
+    crd_cache: CrdBundleCache | None = None,
+) -> list[Finding]:
     """Execute all Layer 2 checks and return findings."""
     resource_names = {r.name for r in obj.resources}
     # resolved_edges: edges where producer IS a known resource (used for cycle and readiness)
@@ -45,7 +49,7 @@ def run(obj: CompositionObject) -> list[Finding]:
     findings.extend(_check_cycles(resolved_edges, obj))
     findings.extend(_check_missing_readiness_gates(resolved_edges, obj))
     if obj.crd_bundle_path:
-        findings.extend(_check_reference_completeness(obj))
+        findings.extend(_check_reference_completeness(obj, crd_cache))
     return findings
 
 
@@ -277,18 +281,23 @@ def _check_missing_readiness_gates(
 # ---------------------------------------------------------------------------
 
 
-def _check_reference_completeness(obj: CompositionObject) -> list[Finding]:
+def _check_reference_completeness(
+    obj: CompositionObject,
+    crd_cache: CrdBundleCache | None = None,
+) -> list[Finding]:
     """Check that atProvider fields referenced in patches exist in the CRD bundle.
 
     For each FromCompositeFieldPath or CombineFromComposite patch that reads
     from a path like "status.atProvider.<resourceName>.<field>", verify that
     <field> exists in the producer resource's CRD status.atProvider schema.
     """
-    bundle = Path(obj.crd_bundle_path)
-    if not bundle.is_dir():
-        return []
-
-    atprovider_schemas = _load_atprovider_schemas(bundle)
+    if crd_cache:
+        atprovider_schemas = crd_cache.atprovider_schemas
+    else:
+        bundle = Path(obj.crd_bundle_path)
+        if not bundle.is_dir():
+            return []
+        atprovider_schemas = _load_atprovider_schemas(bundle)
     resource_index = {r.name: r for r in obj.resources}
     findings: list[Finding] = []
 

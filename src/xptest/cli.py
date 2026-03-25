@@ -135,6 +135,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Stop pipeline on first CRITICAL finding (default: true).",
     )
+    val.add_argument(
+        "--render-mode",
+        choices=["auto", "render", "offline"],
+        default="auto",
+        help=(
+            "How to handle pipeline-mode go-templating compositions. "
+            "'auto' tries crossplane render, falls back to offline. "
+            "'render' requires crossplane CLI + Docker. "
+            "'offline' always uses degraded static parsing. "
+            "(default: auto)"
+        ),
+    )
     val.set_defaults(func=_cmd_validate)
 
     # --- drift ---
@@ -216,6 +228,44 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     exp.set_defaults(func=_cmd_explore)
 
+    # --- scan ---
+    scan = sub.add_parser(
+        "scan",
+        help="Scan a package directory for all Compositions and validate each.",
+    )
+    scan.add_argument(
+        "root",
+        help="Root directory to scan recursively for Compositions and XRDs.",
+    )
+    scan.add_argument(
+        "--functions",
+        default=None,
+        help="Path to functions.yaml for render mode (optional, auto-detected).",
+    )
+    scan.add_argument(
+        "--config",
+        default=None,
+        help="Path to xptest.yaml config file.",
+    )
+    scan.add_argument(
+        "--output",
+        default="scan-report.json",
+        help="Output path for scan report JSON (default: scan-report.json).",
+    )
+    scan.add_argument(
+        "--halt-on-critical",
+        action="store_true",
+        default=True,
+        help="Stop pipeline on first CRITICAL finding per composition.",
+    )
+    scan.add_argument(
+        "--render-mode",
+        choices=["auto", "render", "offline"],
+        default="auto",
+        help="Rendering mode for go-templating compositions (default: auto).",
+    )
+    scan.set_defaults(func=_cmd_scan)
+
     return parser
 
 
@@ -252,6 +302,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
             functions_path=args.functions,
             observed_resources_path=args.observed_resources,
             environment_config_paths=cfg.environment_config_paths,
+            render_mode=args.render_mode,
         )
     except LoadError as exc:
         sys.stderr.write(f"xptest: load error — {exc}\n")
@@ -989,6 +1040,162 @@ def _persist_logic_artifacts(
 
 def _safe_name(value: str) -> str:
     return "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in value)
+
+
+# ---------------------------------------------------------------------------
+# scan subcommand — package-level validation
+# ---------------------------------------------------------------------------
+
+
+def _cmd_scan(args: argparse.Namespace) -> int:
+    import time
+
+    from xptest.cache import load_crd_bundle
+    from xptest.package import discover_package
+
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"xptest: config error — {exc}\n")
+        return 1
+
+    scan_start = time.monotonic()
+
+    # Discover compositions and XRDs
+    result = discover_package(
+        root=args.root,
+        functions_path=args.functions,
+        environment_config_paths=cfg.environment_config_paths,
+    )
+
+    if not result.entries:
+        sys.stderr.write(
+            f"xptest scan: no Composition+XRD pairs found under '{args.root}'\n"
+        )
+        if result.unmatched_compositions:
+            sys.stderr.write(
+                f"  Unmatched compositions: {len(result.unmatched_compositions)}\n"
+            )
+        if result.unmatched_xrds:
+            sys.stderr.write(
+                f"  Unmatched XRDs: {len(result.unmatched_xrds)}\n"
+            )
+        return 1
+
+    print(
+        f"Discovered {len(result.entries)} composition(s) "
+        f"in {result.scan_duration_s:.2f}s"
+    )
+
+    # Load CRD bundle once for all compositions
+    crd_cache = load_crd_bundle(cfg.crd_bundle_path)
+
+    # Validate each composition
+    composition_reports: list[dict[str, Any]] = []
+    total_findings = 0
+    has_critical = False
+
+    for entry in result.entries:
+        comp_start = time.monotonic()
+        print(f"\n  Validating: {entry.composition_name} ...")
+
+        try:
+            obj = load(
+                composition_path=entry.composition_path,
+                xrd_path=entry.xrd_path,
+                crd_bundle_path=cfg.crd_bundle_path,
+                xr_path=None,
+                functions_path=entry.functions_path,
+                observed_resources_path=None,
+                environment_config_paths=entry.environment_config_paths,
+                render_mode=args.render_mode,
+            )
+        except LoadError as exc:
+            comp_report = {
+                "composition": entry.composition_name,
+                "composition_path": entry.composition_path,
+                "xrd_path": entry.xrd_path,
+                "error": str(exc),
+                "findings": [],
+                "duration_s": time.monotonic() - comp_start,
+            }
+            composition_reports.append(comp_report)
+            sys.stderr.write(f"    ERROR: {exc}\n")
+            continue
+
+        vr = run_validations(
+            obj,
+            cfg,
+            halt_on_critical=args.halt_on_critical,
+            crd_cache=crd_cache,
+        )
+
+        finding_dicts = [
+            {
+                "layer": f.layer,
+                "rule": f.rule,
+                "resource": f.resource,
+                "path": f.path,
+                "severity": f.severity.value,
+                "message": f.message,
+                "remediation": f.remediation,
+            }
+            for f in vr.findings
+        ]
+
+        comp_duration = time.monotonic() - comp_start
+        comp_report = {
+            "composition": entry.composition_name,
+            "composition_path": entry.composition_path,
+            "xrd_path": entry.xrd_path,
+            "findings": finding_dicts,
+            "finding_count": len(finding_dicts),
+            "halted_layer": vr.halted_layer,
+            "duration_s": round(comp_duration, 3),
+        }
+        composition_reports.append(comp_report)
+        total_findings += len(finding_dicts)
+
+        critical_count = sum(
+            1 for f in vr.findings if f.severity == Severity.CRITICAL
+        )
+        warning_count = sum(
+            1 for f in vr.findings if f.severity == Severity.WARNING
+        )
+        if critical_count:
+            has_critical = True
+
+        status = "PASS" if not critical_count else "FAIL"
+        print(
+            f"    [{status}] {len(finding_dicts)} findings "
+            f"(CRITICAL={critical_count}, WARNING={warning_count}) "
+            f"in {comp_duration:.2f}s"
+        )
+
+    total_duration = time.monotonic() - scan_start
+
+    # Write report
+    report = {
+        "scan_root": args.root,
+        "compositions_found": len(result.entries),
+        "unmatched_compositions": result.unmatched_compositions,
+        "unmatched_xrds": result.unmatched_xrds,
+        "total_findings": total_findings,
+        "total_duration_s": round(total_duration, 3),
+        "compositions": composition_reports,
+    }
+
+    Path(args.output).write_text(
+        json.dumps(report, indent=2) + "\n"
+    )
+
+    print("\n=== Scan Summary ===")
+    print(f"  Compositions: {len(result.entries)}")
+    print(f"  Total findings: {total_findings}")
+    print(f"  Duration: {total_duration:.2f}s")
+    print(f"  Report: {args.output}")
+
+    return 1 if has_critical else 0
 
 
 if __name__ == "__main__":

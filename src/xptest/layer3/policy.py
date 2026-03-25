@@ -145,7 +145,11 @@ def _evaluate_opa(
     rules_dir: Path,
     config: Config,
 ) -> list[dict[str, Any]]:
-    """Call OPA to evaluate all rule packages and collect violations."""
+    """Call OPA to evaluate all rule packages and collect violations.
+
+    Uses a single OPA eval call with a combined query to avoid 5 sequential
+    subprocess invocations.
+    """
     all_violations: list[dict[str, Any]] = []
 
     with tempfile.NamedTemporaryFile(
@@ -155,16 +159,75 @@ def _evaluate_opa(
         input_path = input_file.name
 
     try:
-        for package in _RULE_PACKAGES:
-            query = f"data.{package}.violations"
-            violations = _run_opa_query(
-                config.opa_binary, input_path, str(rules_dir), query
-            )
-            all_violations.extend(violations)
+        # Try combined query first (single subprocess call)
+        combined_parts = [f"data.{pkg}.violations" for pkg in _RULE_PACKAGES]
+        combined_query = "[" + ", ".join(combined_parts) + "]"
+        combined = _run_opa_combined_query(
+            config.opa_binary, input_path, str(rules_dir), combined_query
+        )
+        if combined is not None:
+            all_violations.extend(combined)
+        else:
+            # Fallback: individual queries (backwards compatible)
+            for package in _RULE_PACKAGES:
+                query = f"data.{package}.violations"
+                violations = _run_opa_query(
+                    config.opa_binary, input_path, str(rules_dir), query
+                )
+                all_violations.extend(violations)
     finally:
         Path(input_path).unlink(missing_ok=True)
 
     return all_violations
+
+
+def _run_opa_combined_query(
+    opa_binary: str,
+    input_path: str,
+    data_dir: str,
+    query: str,
+) -> list[dict[str, Any]] | None:
+    """Run a combined OPA query returning all violations. Returns None on failure."""
+    cmd = [
+        opa_binary,
+        "eval",
+        "--data", data_dir,
+        "--input", input_path,
+        "--format", "json",
+        query,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    # Combined query returns: {"result": [{"expressions": [{"value": [[...], [...], ...]}]}]}
+    violations: list[dict[str, Any]] = []
+    for r in output.get("result", []):
+        for expr in r.get("expressions", []):
+            value = expr.get("value")
+            if isinstance(value, list):
+                for pkg_violations in value:
+                    if isinstance(pkg_violations, list):
+                        violations.extend(pkg_violations)
+                    elif isinstance(pkg_violations, dict):
+                        violations.append(pkg_violations)
+    return violations
 
 
 def _run_opa_query(

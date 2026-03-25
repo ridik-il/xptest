@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from xptest.cache import CrdBundleCache
 from xptest.config import Config
 from xptest.layer1 import static as layer1
 from xptest.layer2 import dependency as layer2
@@ -42,16 +43,17 @@ def run_validations(
     obj: CompositionObject,
     cfg: Config,
     halt_on_critical: bool = True,
+    crd_cache: CrdBundleCache | None = None,
 ) -> ValidationRunResult:
     findings: list[Finding] = []
 
-    l1_findings = layer1.run(obj)
+    l1_findings = layer1.run(obj, crd_cache=crd_cache)
     apply_severity_overrides(l1_findings, cfg.severity_overrides)
     findings.extend(l1_findings)
     if halt_on_critical and _has_critical(l1_findings):
         return ValidationRunResult(findings=findings, halted_layer=1)
 
-    l2_findings = layer2.run(obj)
+    l2_findings = layer2.run(obj, crd_cache=crd_cache)
     apply_severity_overrides(l2_findings, cfg.severity_overrides)
     findings.extend(l2_findings)
     if halt_on_critical and _has_critical(l2_findings):
