@@ -5,7 +5,8 @@ Checks performed (no AWS credentials, no live cluster required):
   L1-02  Patch field path syntax check (fromFieldPath / toFieldPath must be non-empty strings).
   L1-03  Duplicate composed resource name detection.
   L1-04  Provider lock constraint (apiVersion / kind must exist in the CRD bundle).
-  L1-05  Deprecated field detection (stub — extended per provider bundle).
+  L1-05  Deprecated field detection against known AWS provider deprecated fields.
+  L1-06  EnvironmentConfig fixture presence check for FromEnvironmentFieldPath patches.
 
 Execution target: < 5 seconds for typical compositions.
 """

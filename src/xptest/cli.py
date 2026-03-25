@@ -550,7 +550,9 @@ def _cmd_explore(args: argparse.Namespace) -> int:
 
     # Phase 7: Compute §3.3.4 metrics
     # t-way coverage
-    tway_report: dict[str, Any] = {"t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0}
+    tway_report: dict[str, Any] = {
+        "t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0,
+    }
     if not use_explicit_xr:
         xrd_doc_m = _read_xrd(args.xrd)
         xrd_spec_m = (
@@ -569,7 +571,9 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     mutation_report = compute_mutation_score(fault_sweep_count, fi_findings)
 
     # Determinism score — re-render first few inputs and compare
-    determinism_report: dict[str, Any] = {"total_inputs": 0, "identical_outputs": 0, "determinism_score": 1.0}
+    determinism_report: dict[str, Any] = {
+        "total_inputs": 0, "identical_outputs": 0, "determinism_score": 1.0,
+    }
     det_limit = min(5, len(candidates))
     if det_limit > 0 and not use_explicit_xr:
         run_b_snapshots: list = []
