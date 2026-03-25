@@ -21,3 +21,16 @@ def test_generate_auto_xr_candidates_from_service_account_xrd():
     namespaces = {doc["spec"].get("serviceAccountNamespace") for _label, doc in candidates}
     assert "dev" in namespaces
     assert "prod" in namespaces
+
+
+def test_generate_auto_xr_candidates_from_nested_rds_xrd():
+    xrd_path = "../xplane-pkg/pkg/rds-aurora/definition.yaml"
+    candidates = _generate_auto_xr_candidates(xrd_path, max_count=10)
+
+    assert len(candidates) >= 2
+    deletion_policies = {
+        doc["spec"].get("crossplaneParameters", {}).get("deletionPolicy")
+        for _label, doc in candidates
+    }
+    assert "Orphan" in deletion_policies
+    assert "Delete" in deletion_policies

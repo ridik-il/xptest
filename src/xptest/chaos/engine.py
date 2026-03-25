@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Iterable
 
 from xptest.chaos.criticality import classify_criticality
 from xptest.chaos.models import DestructiveChangeFinding, PerturbationScenario
@@ -10,9 +11,13 @@ from xptest.logic.models import RenderedGraphSnapshot
 from xptest.models import Severity
 
 
-def generate_perturbations(snapshot: RenderedGraphSnapshot) -> list[PerturbationScenario]:
+def generate_perturbations(
+    snapshot: RenderedGraphSnapshot,
+    profile: str = "runtime",
+) -> list[PerturbationScenario]:
     scenarios: list[PerturbationScenario] = []
-    if snapshot.resources:
+
+    if profile in {"synthetic", "both"} and snapshot.resources:
         scenarios.append(
             PerturbationScenario(
                 perturbation_id="P1-remove-first-resource",
@@ -20,7 +25,7 @@ def generate_perturbations(snapshot: RenderedGraphSnapshot) -> list[Perturbation
                 params={"resource_id": snapshot.resources[0].resource_id},
             )
         )
-    if snapshot.edges:
+    if profile in {"synthetic", "both"} and snapshot.edges:
         scenarios.append(
             PerturbationScenario(
                 perturbation_id="P2-remove-first-edge",
@@ -28,7 +33,7 @@ def generate_perturbations(snapshot: RenderedGraphSnapshot) -> list[Perturbation
                 params={"edge": list(snapshot.edges[0])},
             )
         )
-    if len(snapshot.resources) >= 1:
+    if profile in {"synthetic", "both"} and len(snapshot.resources) >= 1:
         scenarios.append(
             PerturbationScenario(
                 perturbation_id="P3-rename-first-identity",
@@ -36,7 +41,7 @@ def generate_perturbations(snapshot: RenderedGraphSnapshot) -> list[Perturbation
                 params={"resource_id": snapshot.resources[0].resource_id, "suffix": "-renamed"},
             )
         )
-    if len(snapshot.resources) >= 2:
+    if profile in {"synthetic", "both"} and len(snapshot.resources) >= 2:
         scenarios.append(
             PerturbationScenario(
                 perturbation_id="P4-partial-output-truncation",
@@ -44,6 +49,44 @@ def generate_perturbations(snapshot: RenderedGraphSnapshot) -> list[Perturbation
                 params={"keep": 1},
             )
         )
+
+    if profile in {"runtime", "both"}:
+        secret_ids = [
+            r.resource_id
+            for r in snapshot.resources
+            if _looks_secret_related((r.resource_id, r.kind, r.role, r.name))
+        ]
+        if secret_ids:
+            scenarios.append(
+                PerturbationScenario(
+                    perturbation_id="R1-external-secret-outage",
+                    kind="runtime_outage_remove_set",
+                    params={
+                        "targets": secret_ids,
+                        "expected_removed": secret_ids,
+                        "reason": "external-secret-controller-unavailable",
+                    },
+                )
+            )
+
+        provider_ids = [
+            r.resource_id
+            for r in snapshot.resources
+            if _looks_provider_related((r.resource_id, r.kind, r.role, r.name))
+        ]
+        if provider_ids:
+            scenarios.append(
+                PerturbationScenario(
+                    perturbation_id="R2-provider-connectivity-outage",
+                    kind="runtime_outage_remove_set",
+                    params={
+                        "targets": provider_ids,
+                        "expected_removed": provider_ids,
+                        "reason": "provider-connectivity-issues",
+                    },
+                )
+            )
+
     return scenarios
 
 
@@ -73,6 +116,16 @@ def apply_perturbation(
         kept_ids = {r.resource_id for r in kept}
         mutated.resources = kept
         mutated.edges = [e for e in mutated.edges if e[0] in kept_ids and e[1] in kept_ids]
+    elif scenario.kind == "runtime_outage_remove_set":
+        target_ids = set(str(v) for v in scenario.params.get("targets", []))
+        related = _expand_related_ids(mutated.edges, target_ids, max_hops=2)
+        remove_ids = target_ids | related
+        mutated.resources = [r for r in mutated.resources if r.resource_id not in remove_ids]
+        mutated.edges = [
+            e
+            for e in mutated.edges
+            if e[0] not in remove_ids and e[1] not in remove_ids
+        ]
 
     return mutated
 
@@ -81,6 +134,7 @@ def analyze_destructive_change(
     baseline: RenderedGraphSnapshot,
     mutated: RenderedGraphSnapshot,
     perturbation_id: str,
+    scenario: PerturbationScenario | None = None,
 ) -> list[DestructiveChangeFinding]:
     findings: list[DestructiveChangeFinding] = []
     criticality = classify_criticality(baseline)
@@ -91,7 +145,15 @@ def analyze_destructive_change(
     removed = sorted(base_ids - mut_ids)
     added = sorted(mut_ids - base_ids)
 
-    for rid in removed:
+    expected_removed: set[str] = set()
+    if scenario and scenario.kind == "runtime_outage_remove_set":
+        expected_removed = set(str(v) for v in scenario.params.get("expected_removed", []))
+
+    removed_for_c1 = removed
+    if expected_removed:
+        removed_for_c1 = [rid for rid in removed if rid not in expected_removed]
+
+    for rid in removed_for_c1:
         level = criticality.get(rid).level if rid in criticality else "normal"
         severity = _escalate(Severity.WARNING, level)
         findings.append(
@@ -108,39 +170,83 @@ def analyze_destructive_change(
             )
         )
 
+    if expected_removed:
+        collateral_removed = [rid for rid in removed if rid not in expected_removed]
+        if collateral_removed:
+            collateral_has_data = any(_looks_data_plane_related(rid) for rid in collateral_removed)
+            findings.append(
+                DestructiveChangeFinding(
+                    finding_id="C6-runtime-outage-cascade",
+                    category="destructive-change",
+                    severity=Severity.CRITICAL if collateral_has_data else Severity.WARNING,
+                    case_id=mutated.case_id,
+                    baseline_case_id=baseline.case_id,
+                    perturbation_id=perturbation_id,
+                    resource_id="",
+                    evidence={
+                        "expected_removed": sorted(expected_removed),
+                        "collateral_removed": collateral_removed,
+                    },
+                    remediation=(
+                        "A runtime outage should not prune unrelated resources from desired state. "
+                        "Review go-template conditions and dependency guards for outage paths."
+                    ),
+                )
+            )
+
     if added and removed:
+        replacement_severity = Severity.CRITICAL
+        replacement_remediation = (
+            "Check conditions and naming to avoid unintended "
+            "replacement transitions."
+        )
+        if perturbation_id == "P3-rename-first-identity":
+            # In rename perturbation scenarios, replacement is expected and
+            # should be informational unless other destructive signals appear.
+            replacement_severity = Severity.INFO
+            replacement_remediation = (
+                "Rename perturbation intentionally changes identity. "
+                "Treat this as expected unless combined with cascade or partial-output risks."
+            )
+
         findings.append(
             DestructiveChangeFinding(
                 finding_id="C2-replacement-risk",
                 category="destructive-change",
-                severity=Severity.CRITICAL,
+                severity=replacement_severity,
                 case_id=mutated.case_id,
                 baseline_case_id=baseline.case_id,
                 perturbation_id=perturbation_id,
                 resource_id=",".join(removed),
                 evidence={"removed": removed, "added": added},
-                remediation=(
-                    "Check conditions and naming to avoid unintended "
-                    "replacement transitions."
-                ),
+                remediation=replacement_remediation,
             )
         )
 
     if len(removed) >= 2:
+        cascade_severity = Severity.CRITICAL
+        cascade_remediation = (
+            "Review dependency boundaries; protect unrelated resources "
+            "from cascade."
+        )
+        if perturbation_id == "P4-partial-output-truncation":
+            cascade_severity = Severity.INFO
+            cascade_remediation = (
+                "Synthetic truncation intentionally removes multiple resources. "
+                "Use this as resilience signal, not a production-critical alert by itself."
+            )
+
         findings.append(
             DestructiveChangeFinding(
                 finding_id="C3-cascade-risk",
                 category="destructive-change",
-                severity=Severity.CRITICAL,
+                severity=cascade_severity,
                 case_id=mutated.case_id,
                 baseline_case_id=baseline.case_id,
                 perturbation_id=perturbation_id,
                 resource_id="",
                 evidence={"removed_count": len(removed), "removed": removed},
-                remediation=(
-                    "Review dependency boundaries; protect unrelated resources "
-                    "from cascade."
-                ),
+                remediation=cascade_remediation,
             )
         )
 
@@ -160,11 +266,21 @@ def analyze_destructive_change(
         )
 
     if len(mutated.resources) < len(baseline.resources) and len(mutated.resources) <= 1:
+        partial_severity = Severity.CRITICAL
+        partial_remediation = "Guard against partial render outputs before applying changes."
+        if perturbation_id == "P4-partial-output-truncation":
+            partial_severity = Severity.INFO
+            partial_remediation = (
+                "Synthetic truncation intentionally collapsed the output. "
+                "Treat this as expected for this perturbation. "
+                "Use it only to assess blast radius."
+            )
+
         findings.append(
             DestructiveChangeFinding(
                 finding_id="C5-partial-output-risk",
                 category="destructive-change",
-                severity=Severity.CRITICAL,
+                severity=partial_severity,
                 case_id=mutated.case_id,
                 baseline_case_id=baseline.case_id,
                 perturbation_id=perturbation_id,
@@ -173,7 +289,7 @@ def analyze_destructive_change(
                     "baseline_count": len(baseline.resources),
                     "mutated_count": len(mutated.resources),
                 },
-                remediation="Guard against partial render outputs before applying changes.",
+                remediation=partial_remediation,
             )
         )
 
@@ -186,3 +302,53 @@ def _escalate(base: Severity, criticality_level: str) -> Severity:
     if criticality_level == "high" and base == Severity.INFO:
         return Severity.WARNING
     return base
+
+
+def _expand_related_ids(
+    edges: Iterable[tuple[str, str]],
+    seeds: set[str],
+    max_hops: int,
+) -> set[str]:
+    if not seeds or max_hops <= 0:
+        return set()
+
+    adjacency: dict[str, set[str]] = {}
+    for a, b in edges:
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+
+    visited = set(seeds)
+    frontier = set(seeds)
+    related: set[str] = set()
+
+    for _ in range(max_hops):
+        next_frontier: set[str] = set()
+        for node in frontier:
+            for neigh in adjacency.get(node, set()):
+                if neigh not in visited:
+                    visited.add(neigh)
+                    next_frontier.add(neigh)
+                    related.add(neigh)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    return related
+
+
+def _looks_secret_related(fields: tuple[str, str, str, str]) -> bool:
+    text = "|".join(fields).lower()
+    hints = ("secret", "xsecretkeeper", "externalsecret", "credentials")
+    return any(h in text for h in hints)
+
+
+def _looks_provider_related(fields: tuple[str, str, str, str]) -> bool:
+    text = "|".join(fields).lower()
+    hints = ("providerconfig", "provider", "awsprovider", "provider-aws")
+    return any(h in text for h in hints)
+
+
+def _looks_data_plane_related(resource_id: str) -> bool:
+    text = resource_id.lower()
+    hints = ("db", "database", "rds", "aurora", "cluster", "instance")
+    return any(h in text for h in hints)

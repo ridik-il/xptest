@@ -63,10 +63,15 @@ def test_perturbation_removal_escalates_critical_kind() -> None:
     baseline_obj = _obj("p", [_resource("db-main", kind="DBInstance"), _resource("bucket")])
     baseline = build_snapshot(baseline_obj, case_id="baseline", input_flat={"spec.size": 1})
 
-    scenarios = generate_perturbations(baseline)
+    scenarios = generate_perturbations(baseline, profile="synthetic")
     remove = next(s for s in scenarios if s.kind == "remove_resource")
     mutated = apply_perturbation(baseline, remove)
-    findings = analyze_destructive_change(baseline, mutated, perturbation_id=remove.perturbation_id)
+    findings = analyze_destructive_change(
+        baseline,
+        mutated,
+        perturbation_id=remove.perturbation_id,
+        scenario=remove,
+    )
 
     c1 = [f for f in findings if f.finding_id == "C1-disappearance-risk"]
     assert c1

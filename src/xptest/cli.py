@@ -110,6 +110,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     val.add_argument(
+        "--chaos-profile",
+        choices=["runtime", "synthetic", "both"],
+        default="runtime",
+        help=(
+            "Chaos scenario profile used with --auto-perturb. "
+            "'runtime' targets outage-like failures (secrets/providers), "
+            "'synthetic' keeps legacy graph perturbations, 'both' runs all. "
+            "(default: runtime)"
+        ),
+    )
+    val.add_argument(
         "--nearby-distance",
         type=int,
         default=1,
@@ -335,6 +346,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         snapshots,
         nearby_distance=args.nearby_distance,
         auto_perturb=args.auto_perturb,
+        chaos_profile=args.chaos_profile,
         persist=args.persist_snapshots,
         artifact_root=args.snapshot_dir,
     )
@@ -787,6 +799,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
         logic_inputs,
         nearby_distance=args.nearby_distance,
         auto_perturb=args.auto_perturb,
+        chaos_profile=args.chaos_profile,
         persist=args.persist_snapshots,
         artifact_root=args.snapshot_dir,
     )
@@ -901,16 +914,31 @@ def _field_options(field_name: str, field_schema: dict) -> list:
     if field_type in {"integer", "number"}:
         return [1, 2]
     if field_type == "object":
-        # For objects, provide a minimal nested spec with required fields
+        # For objects, generate combinations from required fields first,
+        # otherwise from the first few declared properties.
         props = field_schema.get("properties", {})
-        required = field_schema.get("required", [])
-        obj = {}
-        for req_field in required:
-            if req_field in props:
-                nested_options = _field_options(req_field, props[req_field])
-                if nested_options:
-                    obj[req_field] = nested_options[0]
-        return [obj if obj else {}]
+        required = [f for f in field_schema.get("required", []) if f in props]
+        fields = required if required else list(props.keys())[:2]
+        if not fields:
+            return [{}]
+
+        option_sets: list[tuple[str, list]] = []
+        for f in fields:
+            vals = _field_options(f, props.get(f, {}))
+            if vals:
+                option_sets.append((f, vals))
+
+        if not option_sets:
+            return [{}]
+
+        combos: list[dict[str, object]] = []
+        for idx, combo in enumerate(product(*(vals for _f, vals in option_sets))):
+            if idx >= 4:
+                break
+            obj = {field: value for (field, _vals), value in zip(option_sets, combo)}
+            combos.append(obj)
+
+        return combos or [{}]
     if field_type == "string":
         if "namespace" in lower or lower in {"env", "environment"}:
             return ["dev", "prod"]
@@ -927,6 +955,7 @@ def _run_logic_phase(
     runs: list[tuple[str, Any, dict[str, Any]]],
     nearby_distance: int,
     auto_perturb: bool,
+    chaos_profile: str,
     persist: bool,
     artifact_root: str,
 ) -> tuple[list[Finding], dict[str, Any]]:
@@ -952,13 +981,14 @@ def _run_logic_phase(
     perturbation_trace: list[dict[str, Any]] = []
     if auto_perturb:
         for baseline in snapshots:
-            scenarios = generate_perturbations(baseline)
+            scenarios = generate_perturbations(baseline, profile=chaos_profile)
             for scenario in scenarios:
                 mutated = apply_perturbation(baseline, scenario)
                 destructive = analyze_destructive_change(
                     baseline,
                     mutated,
                     perturbation_id=scenario.perturbation_id,
+                    scenario=scenario,
                 )
                 perturbation_findings.extend([_destructive_to_finding(d) for d in destructive])
                 perturbation_trace.append(
@@ -991,6 +1021,7 @@ def _run_logic_phase(
         },
         "perturbation": {
             "enabled": auto_perturb,
+            "profile": chaos_profile if auto_perturb else "disabled",
             "scenario_count": len(perturbation_trace),
             "finding_count": len(perturbation_findings),
             "scenarios": perturbation_trace,
