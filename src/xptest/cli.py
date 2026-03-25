@@ -79,6 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional observed-resources YAML for render-time conditional logic.",
     )
     val.add_argument(
+        "--environment-configs",
+        default=None,
+        nargs="+",
+        help="Optional EnvironmentConfig YAML file path(s) for environment-aware rendering.",
+    )
+    val.add_argument(
         "--auto-xr-combinations",
         type=int,
         default=0,
@@ -293,6 +299,11 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if args.auto_xr_combinations > 0:
         return _cmd_validate_auto_xr(args, cfg)
 
+    # Merge CLI environment-configs with config file ones
+    env_config_paths = cfg.environment_config_paths
+    if args.environment_configs:
+        env_config_paths = list(args.environment_configs) + env_config_paths
+
     try:
         obj = load(
             composition_path=args.composition,
@@ -301,7 +312,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
             xr_path=args.xr,
             functions_path=args.functions,
             observed_resources_path=args.observed_resources,
-            environment_config_paths=cfg.environment_config_paths,
+            environment_config_paths=env_config_paths,
             render_mode=args.render_mode,
         )
     except LoadError as exc:
@@ -720,6 +731,11 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
         sys.stderr.write("xptest: failed to auto-generate XR candidates from XRD\n")
         return 1
 
+    # Merge CLI environment-configs with config file ones
+    env_config_paths = cfg.environment_config_paths
+    if args.environment_configs:
+        env_config_paths = list(args.environment_configs) + env_config_paths
+
     all_findings: list[Finding] = []
     logic_inputs: list[tuple[str, Any, dict[str, Any]]] = []
     for idx, (label, xr_doc) in enumerate(candidates):
@@ -736,7 +752,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
                 xr_path=xr_path,
                 functions_path=args.functions,
                 observed_resources_path=args.observed_resources,
-                environment_config_paths=cfg.environment_config_paths,
+                environment_config_paths=env_config_paths,
             )
             findings = _run_layers(obj, cfg, halt_on_critical=args.halt_on_critical)
             all_findings.extend(_tag_findings(findings, case_id))
@@ -846,12 +862,23 @@ def _generate_auto_xr_candidates(xrd_path: str, max_count: int) -> list[tuple[st
             break
         spec_values = {field: value for (field, _), value in zip(options, combo)}
         name = f"auto-xr-{idx}"
+
+        # Extract namespace-like parameter for claim-namespace label
+        claim_namespace = "default"
+        for field, value in spec_values.items():
+            if "namespace" in field.lower() and isinstance(value, str):
+                claim_namespace = value
+                break
+
         xr_doc = {
             "apiVersion": f"{group}/{version}" if group else version,
             "kind": kind,
             "metadata": {
                 "name": name,
-                "labels": {"crossplane.io/claim-name": name},
+                "labels": {
+                    "crossplane.io/claim-name": name,
+                    "crossplane.io/claim-namespace": claim_namespace,
+                },
             },
             "spec": spec_values,
         }
@@ -873,6 +900,17 @@ def _field_options(field_name: str, field_schema: dict) -> list:
         return [True, False]
     if field_type in {"integer", "number"}:
         return [1, 2]
+    if field_type == "object":
+        # For objects, provide a minimal nested spec with required fields
+        props = field_schema.get("properties", {})
+        required = field_schema.get("required", [])
+        obj = {}
+        for req_field in required:
+            if req_field in props:
+                nested_options = _field_options(req_field, props[req_field])
+                if nested_options:
+                    obj[req_field] = nested_options[0]
+        return [obj if obj else {}]
     if field_type == "string":
         if "namespace" in lower or lower in {"env", "environment"}:
             return ["dev", "prod"]
@@ -986,13 +1024,15 @@ def _load_xr_input_flat(xr_path: str | None) -> dict[str, Any]:
 
 
 def _destructive_to_finding(destructive) -> Finding:
+    message = _format_destructive_message(destructive)
+
     return Finding(
         layer=6,
         rule=destructive.finding_id,
         resource=destructive.resource_id,
         path="",
         severity=destructive.severity,
-        message=f"{destructive.finding_id}: offline perturbation risk detected",
+        message=message,
         remediation=destructive.remediation,
         finding_id=destructive.finding_id,
         category=destructive.category,
@@ -1001,6 +1041,56 @@ def _destructive_to_finding(destructive) -> Finding:
         perturbation_id=destructive.perturbation_id,
         evidence=destructive.evidence,
     )
+
+
+def _format_destructive_message(destructive) -> str:
+    evidence = destructive.evidence or {}
+
+    if destructive.finding_id == "C1-disappearance-risk":
+        removed = evidence.get("removed") or destructive.resource_id or "unknown resource"
+        return (
+            "A rendered resource disappeared after a small perturbation. "
+            f"Removed resource: {removed}."
+        )
+
+    if destructive.finding_id == "C2-replacement-risk":
+        removed = evidence.get("removed") or []
+        added = evidence.get("added") or []
+        removed_text = ", ".join(str(v) for v in removed[:3]) or "none"
+        added_text = ", ".join(str(v) for v in added[:3]) or "none"
+        return (
+            "Resource replacement pattern detected under perturbation. "
+            f"Removed ({len(removed)}): {removed_text}. "
+            f"Added ({len(added)}): {added_text}."
+        )
+
+    if destructive.finding_id == "C3-cascade-risk":
+        removed = evidence.get("removed") or []
+        return (
+            "One perturbation caused multiple resources to disappear, which suggests "
+            "a cascade dependency. "
+            f"Removed resources: {len(removed)}."
+        )
+
+    if destructive.finding_id == "C4-unsafe-dependency-drift":
+        baseline_edges = evidence.get("baseline_edges") or []
+        mutated_edges = evidence.get("mutated_edges") or []
+        return (
+            "Dependency graph changed after perturbation. "
+            f"Edges before: {len(baseline_edges)}, after: {len(mutated_edges)}."
+        )
+
+    if destructive.finding_id == "C5-partial-output-risk":
+        baseline = evidence.get("baseline_count")
+        mutated = evidence.get("mutated_count")
+        if baseline is not None and mutated is not None:
+            return (
+                "Render output collapsed to a partial set after perturbation. "
+                f"Resources before: {baseline}, after: {mutated}."
+            )
+        return "Render output collapsed to a partial set after perturbation."
+
+    return f"{destructive.finding_id}: offline perturbation risk detected"
 
 
 def _persist_logic_artifacts(
