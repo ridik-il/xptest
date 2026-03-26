@@ -293,6 +293,23 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         sys.stderr.write(f"xptest: config error — {exc}\n")
         return 1
 
+    try:
+        args.composition = _resolve_input_path(args.composition)
+        args.xrd = _resolve_input_path(args.xrd)
+        if args.xr:
+            args.xr = _resolve_input_path(args.xr)
+        if args.functions:
+            args.functions = _resolve_input_path(args.functions)
+        if args.observed_resources:
+            args.observed_resources = _resolve_input_path(args.observed_resources)
+        if args.environment_configs:
+            args.environment_configs = [
+                _resolve_input_path(path) for path in args.environment_configs
+            ]
+    except (FileNotFoundError, ValueError) as exc:
+        sys.stderr.write(f"xptest: path resolution error — {exc}\n")
+        return 1
+
     if args.auto_xr_combinations > 0:
         if args.xr:
             sys.stderr.write("xptest: --auto-xr-combinations cannot be used together with --xr\n")
@@ -1067,15 +1084,16 @@ def _run_logic_phase(
         progress.phase("Chaos perturbation testing")
         t0_perturb = _time.monotonic()
 
-        # Optimisation: deduplicate baselines with identical graph_hash.
-        # When multiple combos produce the same rendered graph, perturbation
-        # results are identical — we only need to run perturbation once.
-        seen_hashes: dict[str, str] = {}  # graph_hash -> first case_id
+        # Deduplicate baselines by structural identity (resource presence + edges),
+        # not full graph hash. Field-level differences should not duplicate
+        # chaos scenarios when structure is identical.
+        seen_keys: dict[str, str] = {}  # structure_key -> first case_id
         dedup_baselines: list = []
         dedup_skipped = 0
         for s in snapshots:
-            if s.graph_hash not in seen_hashes:
-                seen_hashes[s.graph_hash] = s.case_id
+            key = _chaos_structure_key(s)
+            if key not in seen_keys:
+                seen_keys[key] = s.case_id
                 dedup_baselines.append(s)
             else:
                 dedup_skipped += 1
@@ -1084,7 +1102,7 @@ def _run_logic_phase(
         if dedup_skipped:
             progress.step(
                 f"Dedup: {len(dedup_baselines)} unique baselines "
-                f"({dedup_skipped} identical graphs skipped)"
+                f"({dedup_skipped} identical structures skipped)"
             )
 
         # Optimisation: cache criticality classification per baseline
@@ -1104,8 +1122,9 @@ def _run_logic_phase(
         scenario_counter = 0
         for baseline in dedup_baselines:
             # Cache criticality
-            if baseline.graph_hash not in criticality_cache:
-                criticality_cache[baseline.graph_hash] = classify_criticality(baseline)
+            baseline_key = _chaos_structure_key(baseline)
+            if baseline_key not in criticality_cache:
+                criticality_cache[baseline_key] = classify_criticality(baseline)
 
             scenarios = generate_perturbations(baseline, profile=chaos_profile)
             for sc in scenarios:
@@ -1200,6 +1219,44 @@ def _load_xr_input_flat(xr_path: str | None) -> dict[str, Any]:
     except Exception:
         return {}
     return {}
+
+
+def _resolve_input_path(path: str) -> str:
+    """Resolve a CLI file path from common repository layouts.
+
+    Supports direct paths, and package-root-prefixed paths used in this workspace,
+    such as ``pkg/...`` resolving to ``xplane-pkg/pkg/...``.
+    """
+    p = Path(path)
+    if p.exists():
+        return str(p)
+
+    if p.is_absolute():
+        raise FileNotFoundError(path)
+
+    candidates: list[Path] = []
+
+    # Common roots in this thesis workspace.
+    for root in ("xplane-pkg", "crossplane-composition-tester"):
+        cand = Path(root) / p
+        if cand.exists() and cand.is_file():
+            candidates.append(cand)
+
+    # Fallback: find exact suffix match anywhere in the workspace.
+    search_suffix = str(p).lstrip("./")
+    if search_suffix:
+        for match in Path.cwd().glob(f"**/{search_suffix}"):
+            if match.is_file():
+                candidates.append(match)
+
+    unique = sorted({c.resolve() for c in candidates})
+    if len(unique) == 1:
+        return str(unique[0])
+    if len(unique) > 1:
+        options = ", ".join(str(c) for c in unique[:3])
+        raise ValueError(f"ambiguous path '{path}' matched multiple files: {options}")
+
+    raise FileNotFoundError(path)
 
 
 def _destructive_to_finding(destructive) -> Finding:
@@ -1309,6 +1366,14 @@ def _persist_logic_artifacts(
 
 def _safe_name(value: str) -> str:
     return "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in value)
+
+
+def _chaos_structure_key(snapshot) -> str:
+    payload = {
+        "resource_ids": sorted([n.resource_id for n in snapshot.resources]),
+        "edges": sorted([list(e) for e in snapshot.edges]),
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

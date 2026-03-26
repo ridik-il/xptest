@@ -351,7 +351,15 @@ def analyze_destructive_change(
             )
         )
 
-    if len(mutated.resources) < len(baseline.resources) and len(mutated.resources) <= 1:
+    should_flag_partial = False
+    if expected_removed:
+        expected_after = len(base_ids - expected_removed)
+        if len(mutated.resources) < expected_after:
+            should_flag_partial = True
+    elif len(mutated.resources) < len(baseline.resources) and len(mutated.resources) <= 1:
+        should_flag_partial = True
+
+    if should_flag_partial:
         partial_severity = Severity.CRITICAL
         partial_remediation = "Guard against partial render outputs before applying changes."
         if perturbation_id == "P4-partial-output-truncation":

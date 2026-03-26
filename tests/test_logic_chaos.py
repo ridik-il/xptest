@@ -5,6 +5,7 @@ from xptest.chaos.engine import (
     apply_perturbation,
     generate_perturbations,
 )
+from xptest.cli import _run_logic_phase
 from xptest.logic.coverage import compute_coverage, nearby_pairs
 from xptest.logic.heuristics import find_nearby_diff_heuristics, find_snapshot_heuristics
 from xptest.logic.snapshot import build_snapshot
@@ -90,3 +91,89 @@ def test_coverage_counts_unique_graphs() -> None:
     assert len(records) == 2
     assert summary.total_cases == 2
     assert summary.unique_graphs == 2
+
+
+def test_runtime_outage_expected_removals_do_not_trigger_c3_c5() -> None:
+    baseline_obj = _obj(
+        "runtime",
+        [
+            _resource("aws-sm-master-user-credentials", kind="XSecretKeeper"),
+            _resource("db-subnet-group", kind="DBSubnetGroup"),
+        ],
+    )
+    baseline = build_snapshot(baseline_obj, case_id="baseline", input_flat={})
+
+    scenario = next(
+        s
+        for s in generate_perturbations(baseline, profile="runtime")
+        if s.perturbation_id == "R1-external-secret-outage"
+    )
+    # Force this scenario to remove both resources as expected.
+    scenario.params["targets"] = [r.resource_id for r in baseline.resources]
+    scenario.params["expected_removed"] = [r.resource_id for r in baseline.resources]
+
+    mutated = apply_perturbation(baseline, scenario)
+    findings = analyze_destructive_change(
+        baseline,
+        mutated,
+        perturbation_id=scenario.perturbation_id,
+        scenario=scenario,
+    )
+
+    rules = {f.finding_id for f in findings}
+    assert "C3-cascade-risk" not in rules
+    assert "C5-partial-output-risk" not in rules
+
+
+def test_chaos_dedup_uses_structure_not_graph_hash() -> None:
+    obj_a = _obj(
+        "a",
+        [
+            ComposedResource(
+                name="aws-sm-master-user-credentials",
+                api_version="crossplane.swisscom.com/v1alpha1",
+                kind="XSecretKeeper",
+                spec={"forProvider": {"region": "eu-central-1"}},
+            ),
+            ComposedResource(
+                name="db-subnet-group",
+                api_version="database.aws.crossplane.io/v1beta1",
+                kind="DBSubnetGroup",
+                spec={"forProvider": {"name": "a"}},
+            ),
+        ],
+    )
+    obj_b = _obj(
+        "b",
+        [
+            ComposedResource(
+                name="aws-sm-master-user-credentials",
+                api_version="crossplane.swisscom.com/v1alpha1",
+                kind="XSecretKeeper",
+                spec={"forProvider": {"region": "us-east-1"}},
+            ),
+            ComposedResource(
+                name="db-subnet-group",
+                api_version="database.aws.crossplane.io/v1beta1",
+                kind="DBSubnetGroup",
+                spec={"forProvider": {"name": "b"}},
+            ),
+        ],
+    )
+
+    findings, sections = _run_logic_phase(
+        runs=[
+            ("case-a", obj_a, {"spec.a": 1}),
+            ("case-b", obj_b, {"spec.a": 2}),
+        ],
+        nearby_distance=0,
+        auto_perturb=True,
+        chaos_profile="runtime",
+        persist=False,
+        artifact_root="xptest-artifacts",
+    )
+
+    assert sections["logic"]["coverage"]["total_cases"] == 2
+    assert sections["perturbation"]["unique_baselines"] == 1
+    assert sections["perturbation"]["dedup_skipped"] == 1
+    assert isinstance(findings, list)
