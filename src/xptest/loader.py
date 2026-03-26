@@ -40,6 +40,9 @@ def load(
     observed_resources_path: str | None = None,
     environment_config_paths: list[str] | None = None,
     render_mode: str = "auto",
+    *,
+    _comp_doc: dict[str, Any] | None = None,
+    _xrd_doc: dict[str, Any] | None = None,
 ) -> CompositionObject:
     """Parse a Composition + XRD YAML pair into a CompositionObject.
 
@@ -48,9 +51,11 @@ def load(
             "auto" — try real render via crossplane CLI, fall back to degraded
             "render" — require real render, fail if unavailable
             "offline" — always use offline parsing (degraded for go-templating)
+        _comp_doc: Pre-parsed composition dict (avoids re-reading YAML from disk).
+        _xrd_doc: Pre-parsed XRD dict (avoids re-reading YAML from disk).
     """
-    comp_doc = _read_yaml(composition_path)
-    xrd_doc = _read_yaml(xrd_path)
+    comp_doc = _comp_doc if _comp_doc is not None else _read_yaml(composition_path)
+    xrd_doc = _xrd_doc if _xrd_doc is not None else _read_yaml(xrd_path)
 
     _assert_kind(comp_doc, "Composition", composition_path)
     _assert_kind(xrd_doc, "CompositeResourceDefinition", xrd_path)
@@ -326,12 +331,26 @@ def _run_crossplane_render(
     environment_config_paths: list[str],
 ) -> str:
     timeout_seconds = 300
-    temp_functions_path: str | None = None
-    candidate_function_paths = [functions_path]
-    rewritten = _rewrite_functions_for_docker_runtime(functions_path)
-    if rewritten is not None:
-        temp_functions_path = rewritten
-        candidate_function_paths.append(rewritten)
+    temp_files: list[str] = []
+
+    # Strategy: try the most efficient approach first (running containers),
+    # fall back to Docker runtime (slow — starts new containers each time).
+    candidate_function_paths: list[str] = []
+
+    # 1. Try to connect to already-running Docker containers via their IPs
+    host_dev = _rewrite_functions_for_host_development(functions_path)
+    if host_dev is not None:
+        candidate_function_paths.append(host_dev)
+        temp_files.append(host_dev)
+
+    # 2. Try original functions.yaml as-is (works when already in Docker network)
+    candidate_function_paths.append(functions_path)
+
+    # 3. Fallback: strip Development annotations → Docker runtime (slow but safe)
+    docker_rewrite = _rewrite_functions_for_docker_runtime(functions_path)
+    if docker_rewrite is not None:
+        candidate_function_paths.append(docker_rewrite)
+        temp_files.append(docker_rewrite)
 
     try:
         last_error = ""
@@ -343,8 +362,8 @@ def _run_crossplane_render(
                 base_args.append(f"--observed-resources={observed_resources_path}")
 
             commands = [
-                ["crossplane", "beta", "render", *base_args],
                 ["crossplane", "render", *base_args],
+                ["crossplane", "beta", "render", *base_args],
             ]
 
             for cmd in commands:
@@ -383,8 +402,109 @@ def _run_crossplane_render(
             f"{last_error or 'render command is unavailable in this Crossplane CLI version'}"
         )
     finally:
-        if temp_functions_path:
-            Path(temp_functions_path).unlink(missing_ok=True)
+        for tf in temp_files:
+            Path(tf).unlink(missing_ok=True)
+
+
+# Cache for Docker container IPs — looked up once per process.
+_container_ip_cache: dict[str, str] = {}
+
+
+def _get_container_ip(container_name: str) -> str | None:
+    """Get a Docker container's IP address if it is running.
+
+    Cached per-process so we only call `docker inspect` once per container.
+    """
+    if container_name in _container_ip_cache:
+        cached = _container_ip_cache[container_name]
+        return cached if cached else None
+
+    try:
+        result = subprocess.run(
+            [
+                "docker", "inspect", "-f",
+                "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                container_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        ip = result.stdout.strip()
+        if result.returncode == 0 and ip:
+            _container_ip_cache[container_name] = ip
+            return ip
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    _container_ip_cache[container_name] = ""
+    return None
+
+
+def _rewrite_functions_for_host_development(functions_path: str) -> str | None:
+    """Rewrite Development-mode functions.yaml to use host-accessible container IPs.
+
+    When function containers are running on a Docker network, their names
+    (e.g. ``function-go-templating:9443``) are not resolvable from the host.
+    This function detects running containers, gets their Docker IPs, and
+    rewrites the Development target annotations so ``crossplane render``
+    on the host can connect directly via gRPC.
+
+    Returns a temp file path if any rewrites were made, otherwise None.
+    """
+    p = Path(functions_path)
+    if not p.exists():
+        return None
+
+    with p.open() as fh:
+        docs = list(yaml.safe_load_all(fh))
+
+    changed = False
+    rewritten_docs: list[Any] = []
+
+    for doc in docs:
+        if not isinstance(doc, dict):
+            rewritten_docs.append(doc)
+            continue
+
+        metadata = doc.get("metadata", {})
+        annotations = metadata.get("annotations", {})
+        if not isinstance(annotations, dict):
+            rewritten_docs.append(doc)
+            continue
+
+        runtime = annotations.get("render.crossplane.io/runtime")
+        target = annotations.get("render.crossplane.io/runtime-development-target", "")
+
+        if runtime != "Development" or not target:
+            rewritten_docs.append(doc)
+            continue
+
+        # Parse target: "container-name:port" → lookup container IP
+        parts = target.rsplit(":", 1)
+        if len(parts) != 2:
+            rewritten_docs.append(doc)
+            continue
+
+        container_name, port = parts[0], parts[1]
+        ip = _get_container_ip(container_name)
+        if not ip:
+            rewritten_docs.append(doc)
+            continue
+
+        # Rewrite target to use host-accessible IP
+        new_target = f"{ip}:{port}"
+        annotations["render.crossplane.io/runtime-development-target"] = new_target
+        changed = True
+        rewritten_docs.append(doc)
+
+    if not changed:
+        return None
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix="-hostdev.yaml", delete=False) as temp:
+        yaml.safe_dump_all(rewritten_docs, temp, sort_keys=False)
+        return temp.name
 
 
 def _rewrite_functions_for_docker_runtime(functions_path: str) -> str | None:

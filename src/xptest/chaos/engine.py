@@ -87,6 +87,85 @@ def generate_perturbations(
                 )
             )
 
+        # R3: Network / subnet dependency absence
+        network_ids = [
+            r.resource_id
+            for r in snapshot.resources
+            if _looks_network_related((r.resource_id, r.kind, r.role, r.name))
+        ]
+        if network_ids:
+            scenarios.append(
+                PerturbationScenario(
+                    perturbation_id="R3-network-dependency-absence",
+                    kind="runtime_outage_remove_set",
+                    params={
+                        "targets": network_ids,
+                        "expected_removed": network_ids,
+                        "reason": "subnet-or-security-group-not-ready",
+                    },
+                )
+            )
+
+        # R4: IAM / policy attachment gap
+        iam_ids = [
+            r.resource_id
+            for r in snapshot.resources
+            if _looks_iam_related((r.resource_id, r.kind, r.role, r.name))
+        ]
+        if iam_ids:
+            scenarios.append(
+                PerturbationScenario(
+                    perturbation_id="R4-iam-policy-gap",
+                    kind="runtime_outage_remove_set",
+                    params={
+                        "targets": iam_ids,
+                        "expected_removed": iam_ids,
+                        "reason": "iam-role-or-policy-attachment-missing",
+                    },
+                )
+            )
+
+        # R5: Database/stateful resource unavailability (dependency-not-ready)
+        # Simulates the most critical resource in the graph being not-ready,
+        # which blocks downstream resources.
+        db_ids = [
+            r.resource_id
+            for r in snapshot.resources
+            if _looks_database_related((r.resource_id, r.kind, r.role, r.name))
+        ]
+        if db_ids:
+            scenarios.append(
+                PerturbationScenario(
+                    perturbation_id="R5-database-not-ready",
+                    kind="runtime_outage_remove_set",
+                    params={
+                        "targets": db_ids[:1],  # just the first DB resource
+                        "expected_removed": db_ids[:1],
+                        "reason": "db-cluster-not-ready-blocks-downstream",
+                    },
+                )
+            )
+
+        # R6: High-fanout dependency removal — remove the resource with
+        # the highest dependency fanout (most dependents) to test cascade impact.
+        if snapshot.edges:
+            from collections import Counter
+
+            fanout = Counter(src for src, _dst in snapshot.edges)
+            if fanout:
+                hub_id = fanout.most_common(1)[0][0]
+                scenarios.append(
+                    PerturbationScenario(
+                        perturbation_id="R6-hub-dependency-removal",
+                        kind="runtime_outage_remove_set",
+                        params={
+                            "targets": [hub_id],
+                            "expected_removed": [hub_id],
+                            "reason": "highest-fanout-dependency-removed",
+                        },
+                    )
+                )
+
     return scenarios
 
 
@@ -223,7 +302,11 @@ def analyze_destructive_change(
             )
         )
 
-    if len(removed) >= 2:
+    # C3: cascade risk — only counts *unexpected* removals (collateral damage).
+    # When a runtime_outage scenario intentionally removes N resources, those
+    # are expected, not a cascade.
+    unexpected_removed = [rid for rid in removed if rid not in expected_removed]
+    if len(unexpected_removed) >= 2:
         cascade_severity = Severity.CRITICAL
         cascade_remediation = (
             "Review dependency boundaries; protect unrelated resources "
@@ -245,7 +328,10 @@ def analyze_destructive_change(
                 baseline_case_id=baseline.case_id,
                 perturbation_id=perturbation_id,
                 resource_id="",
-                evidence={"removed_count": len(removed), "removed": removed},
+                evidence={
+                    "removed_count": len(unexpected_removed),
+                    "removed": unexpected_removed,
+                },
                 remediation=cascade_remediation,
             )
         )
@@ -351,4 +437,25 @@ def _looks_provider_related(fields: tuple[str, str, str, str]) -> bool:
 def _looks_data_plane_related(resource_id: str) -> bool:
     text = resource_id.lower()
     hints = ("db", "database", "rds", "aurora", "cluster", "instance")
+    return any(h in text for h in hints)
+
+
+def _looks_network_related(fields: tuple[str, str, str, str]) -> bool:
+    text = "|".join(fields).lower()
+    hints = (
+        "subnet", "securitygroup", "xsecuritygroup", "dbsubnetgroup",
+        "vpc", "routetable", "networkacl", "sg-",
+    )
+    return any(h in text for h in hints)
+
+
+def _looks_iam_related(fields: tuple[str, str, str, str]) -> bool:
+    text = "|".join(fields).lower()
+    hints = ("role", "policy", "iam", "serviceaccount")
+    return any(h in text for h in hints)
+
+
+def _looks_database_related(fields: tuple[str, str, str, str]) -> bool:
+    text = "|".join(fields).lower()
+    hints = ("dbcluster", "dbinstance", "aurora", "rds", "database")
     return any(h in text for h in hints)

@@ -738,25 +738,64 @@ def _cmd_explore(args: argparse.Namespace) -> int:
 
 
 def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
+    import time as _time
+
+    from xptest import progress
+
+    progress.init()
+    progress.phase("Generating XR parameter combinations")
+
     candidates = _generate_auto_xr_candidates(args.xrd, max_count=args.auto_xr_combinations)
     if not candidates:
         sys.stderr.write("xptest: failed to auto-generate XR candidates from XRD\n")
         return 1
+
+    # Deduplicate candidates that produce identical spec values
+    seen_specs: set[str] = set()
+    unique_candidates: list[tuple[str, dict]] = []
+    for label, xr_doc in candidates:
+        spec_key = json.dumps(xr_doc.get("spec", {}), sort_keys=True)
+        if spec_key not in seen_specs:
+            seen_specs.add(spec_key)
+            unique_candidates.append((label, xr_doc))
+    skipped = len(candidates) - len(unique_candidates)
+    candidates = unique_candidates
+    progress.step(
+        f"{len(candidates)} unique combinations"
+        + (f" ({skipped} duplicates removed)" if skipped else "")
+    )
 
     # Merge CLI environment-configs with config file ones
     env_config_paths = cfg.environment_config_paths
     if args.environment_configs:
         env_config_paths = list(args.environment_configs) + env_config_paths
 
+    # --- Optimisation: parse composition and XRD once ---
+    progress.phase("Loading composition and XRD")
+    comp_doc = yaml.safe_load(Path(args.composition).read_text())
+    xrd_doc = yaml.safe_load(Path(args.xrd).read_text())
+    progress.step("Parsed composition and XRD from disk (once)")
+
+    # --- Optimisation: pre-load CRD cache once ---
+    from xptest.cache import load_crd_bundle
+
+    crd_cache = load_crd_bundle(cfg.crd_bundle_path)
+
+    # --- Render + validate loop ---
+    progress.phase(f"Rendering and validating {len(candidates)} combinations")
+    timings: dict[str, float] = {"render": 0.0, "validate": 0.0, "snapshot": 0.0}
+
     all_findings: list[Finding] = []
     logic_inputs: list[tuple[str, Any, dict[str, Any]]] = []
     for idx, (label, xr_doc) in enumerate(candidates):
+        progress.combo(idx, len(candidates), label)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp:
             yaml.safe_dump(xr_doc, temp, sort_keys=False)
             xr_path = temp.name
         case_id = f"auto-xr-{idx}:{label}"
 
         try:
+            t0 = _time.monotonic()
             obj = load(
                 composition_path=args.composition,
                 xrd_path=args.xrd,
@@ -765,8 +804,17 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
                 functions_path=args.functions,
                 observed_resources_path=args.observed_resources,
                 environment_config_paths=env_config_paths,
+                _comp_doc=comp_doc,
+                _xrd_doc=xrd_doc,
             )
-            findings = _run_layers(obj, cfg, halt_on_critical=args.halt_on_critical)
+            timings["render"] += _time.monotonic() - t0
+
+            t0 = _time.monotonic()
+            findings = _run_layers(
+                obj, cfg, halt_on_critical=args.halt_on_critical, crd_cache=crd_cache
+            )
+            timings["validate"] += _time.monotonic() - t0
+
             all_findings.extend(_tag_findings(findings, case_id))
             if args.logic_test:
                 logic_inputs.append(
@@ -777,7 +825,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
                     )
                 )
         except LoadError as exc:
-            sys.stderr.write(f"xptest: load error ({case_id}) — {exc}\n")
+            progress.warn(f"load error ({case_id}): {exc}")
             all_findings.extend(
                 _tag_findings(
                     [
@@ -792,6 +840,11 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
         finally:
             Path(xr_path).unlink(missing_ok=True)
 
+    progress.done(
+        f"Render+validate: render={timings['render']:.1f}s "
+        f"validate={timings['validate']:.1f}s"
+    )
+
     if not args.logic_test:
         return layer4.write(all_findings, output_path=args.output)
 
@@ -805,11 +858,14 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
     )
     all_findings.extend(logic_findings)
     sections["critical_count"] = sum(1 for f in all_findings if f.severity == Severity.CRITICAL)
+    sections["timings"] = timings
     return layer4.write_extended(all_findings, output_path=args.output, extra_sections=sections)
 
 
-def _run_layers(obj, cfg, halt_on_critical: bool) -> list:
-    result = run_validations(obj, cfg, halt_on_critical=halt_on_critical)
+def _run_layers(obj, cfg, halt_on_critical: bool, crd_cache=None) -> list:
+    result = run_validations(
+        obj, cfg, halt_on_critical=halt_on_critical, crd_cache=crd_cache,
+    )
     if result.halted_layer in {1, 2}:
         sys.stderr.write(
             f"xptest: CRITICAL finding(s) in Layer {result.halted_layer} — halting pipeline.\n"
@@ -959,49 +1015,137 @@ def _run_logic_phase(
     persist: bool,
     artifact_root: str,
 ) -> tuple[list[Finding], dict[str, Any]]:
+    import time as _time
+
+    from xptest import progress
+    from xptest.chaos.criticality import classify_criticality
+
+    progress.phase("Logic testing")
+    t0_logic = _time.monotonic()
+
+    # --- Build snapshots ---
+    t0 = _time.monotonic()
     snapshots = [
         build_snapshot(obj, case_id=case_id, input_flat=input_flat)
         for case_id, obj, input_flat in runs
     ]
+    t_snapshot = _time.monotonic() - t0
+    progress.step(f"Built {len(snapshots)} snapshots ({t_snapshot:.2f}s)")
 
+    # --- Snapshot heuristics ---
     findings: list[Finding] = []
     for s in snapshots:
         findings.extend(
             _tag_findings([f.to_finding() for f in find_snapshot_heuristics(s)], s.case_id)
         )
 
+    # --- Nearby pairs ---
     pairs = nearby_pairs(snapshots, max_distance=nearby_distance)
     by_case = {s.case_id: s for s in snapshots}
     diff_findings = find_nearby_diff_heuristics(by_case, pairs)
     findings.extend([f.to_finding() for f in diff_findings])
+    progress.step(f"Nearby pairs: {len(pairs)}, diff findings: {len(diff_findings)}")
 
+    # --- Coverage ---
     coverage_records, coverage_summary = compute_coverage(snapshots)
+    progress.step(
+        f"Coverage: {coverage_summary.unique_graphs} unique graphs, "
+        f"{coverage_summary.unique_presence_signatures} presence sigs"
+    )
 
+    # --- Perturbation ---
     perturbation_findings: list[Finding] = []
     perturbation_trace: list[dict[str, Any]] = []
+    perturbation_stats: dict[str, Any] = {
+        "dedup_skipped": 0,
+        "total_scenarios": 0,
+        "unique_baselines": 0,
+        "scenario_timings": [],
+    }
+
     if auto_perturb:
-        for baseline in snapshots:
+        progress.phase("Chaos perturbation testing")
+        t0_perturb = _time.monotonic()
+
+        # Optimisation: deduplicate baselines with identical graph_hash.
+        # When multiple combos produce the same rendered graph, perturbation
+        # results are identical — we only need to run perturbation once.
+        seen_hashes: dict[str, str] = {}  # graph_hash -> first case_id
+        dedup_baselines: list = []
+        dedup_skipped = 0
+        for s in snapshots:
+            if s.graph_hash not in seen_hashes:
+                seen_hashes[s.graph_hash] = s.case_id
+                dedup_baselines.append(s)
+            else:
+                dedup_skipped += 1
+        perturbation_stats["dedup_skipped"] = dedup_skipped
+        perturbation_stats["unique_baselines"] = len(dedup_baselines)
+        if dedup_skipped:
+            progress.step(
+                f"Dedup: {len(dedup_baselines)} unique baselines "
+                f"({dedup_skipped} identical graphs skipped)"
+            )
+
+        # Optimisation: cache criticality classification per baseline
+        criticality_cache: dict[str, dict] = {}
+
+        total_scenarios = 0
+        for baseline in dedup_baselines:
             scenarios = generate_perturbations(baseline, profile=chaos_profile)
-            for scenario in scenarios:
-                mutated = apply_perturbation(baseline, scenario)
+            total_scenarios += len(scenarios)
+
+        perturbation_stats["total_scenarios"] = total_scenarios
+        progress.step(
+            f"Running {total_scenarios} scenarios across "
+            f"{len(dedup_baselines)} baselines"
+        )
+
+        scenario_counter = 0
+        for baseline in dedup_baselines:
+            # Cache criticality
+            if baseline.graph_hash not in criticality_cache:
+                criticality_cache[baseline.graph_hash] = classify_criticality(baseline)
+
+            scenarios = generate_perturbations(baseline, profile=chaos_profile)
+            for sc in scenarios:
+                scenario_counter += 1
+                progress.scenario(
+                    scenario_counter - 1, total_scenarios, sc.perturbation_id
+                )
+                t0_sc = _time.monotonic()
+                mutated = apply_perturbation(baseline, sc)
                 destructive = analyze_destructive_change(
                     baseline,
                     mutated,
-                    perturbation_id=scenario.perturbation_id,
-                    scenario=scenario,
+                    perturbation_id=sc.perturbation_id,
+                    scenario=sc,
                 )
-                perturbation_findings.extend([_destructive_to_finding(d) for d in destructive])
+                dt_sc = _time.monotonic() - t0_sc
+                perturbation_findings.extend(
+                    [_destructive_to_finding(d) for d in destructive]
+                )
                 perturbation_trace.append(
                     {
                         "baseline": baseline.case_id,
                         "mutated": mutated.case_id,
-                        "perturbation_id": scenario.perturbation_id,
-                        "kind": scenario.kind,
-                        "params": scenario.params,
+                        "perturbation_id": sc.perturbation_id,
+                        "kind": sc.kind,
+                        "params": sc.params,
+                        "finding_count": len(destructive),
+                        "duration_s": round(dt_sc, 4),
                     }
                 )
 
+        t_perturb = _time.monotonic() - t0_perturb
+        progress.done(
+            f"Perturbation: {total_scenarios} scenarios, "
+            f"{len(perturbation_findings)} findings"
+        )
+        perturbation_stats["duration_s"] = round(t_perturb, 2)
+
     findings.extend(perturbation_findings)
+    t_logic_total = _time.monotonic() - t0_logic
 
     sections: dict[str, Any] = {
         "logic": {
@@ -1009,6 +1153,7 @@ def _run_logic_phase(
             "coverage_records": [asdict(r) for r in coverage_records],
             "nearby_pairs": len(pairs),
             "logic_finding_count": len(findings) - len(perturbation_findings),
+            "duration_s": round(t_logic_total, 2),
             "snapshots": [
                 {
                     "case_id": s.case_id,
@@ -1024,6 +1169,9 @@ def _run_logic_phase(
             "profile": chaos_profile if auto_perturb else "disabled",
             "scenario_count": len(perturbation_trace),
             "finding_count": len(perturbation_findings),
+            "dedup_skipped": perturbation_stats.get("dedup_skipped", 0),
+            "unique_baselines": perturbation_stats.get("unique_baselines", 0),
+            "duration_s": perturbation_stats.get("duration_s", 0),
             "scenarios": perturbation_trace,
         },
     }

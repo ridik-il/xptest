@@ -118,6 +118,13 @@ def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO
             f"logic_findings={logic.get('logic_finding_count', 0)}\n"
         )
 
+    timings = extra_sections.get("timings", {})
+    if timings:
+        out.write("xptest: timing breakdown\n")
+        for key, val in timings.items():
+            if isinstance(val, (int, float)):
+                out.write(f"  {key}={val:.1f}s\n")
+
     perturb = extra_sections.get("perturbation", {})
     if perturb:
         out.write("xptest: perturbation summary\n")
@@ -125,6 +132,29 @@ def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO
             f"  scenarios={perturb.get('scenario_count', 0)} "
             f"findings={perturb.get('finding_count', 0)}\n"
         )
+        dedup = perturb.get("dedup_skipped", 0)
+        if dedup:
+            out.write(
+                f"  unique_baselines={perturb.get('unique_baselines', 0)} "
+                f"dedup_skipped={dedup}\n"
+            )
+        duration = perturb.get("duration_s", 0)
+        if duration:
+            out.write(f"  perturbation_duration={duration:.1f}s\n")
+
+        # Summarise which scenario categories found actual issues
+        scenarios = perturb.get("scenarios", [])
+        if scenarios:
+            by_kind: dict[str, tuple[int, int]] = {}  # kind -> (total, with_findings)
+            for sc in scenarios:
+                k = sc.get("perturbation_id", "unknown")
+                total, found = by_kind.get(k, (0, 0))
+                fc = sc.get("finding_count", 0)
+                by_kind[k] = (total + 1, found + (1 if fc > 0 else 0))
+            out.write("  scenario signal:\n")
+            for k, (total, found) in sorted(by_kind.items()):
+                signal = "HIT" if found else "no-signal"
+                out.write(f"    {k}: {found}/{total} [{signal}]\n")
 
     exploration = extra_sections.get("exploration", {})
     if exploration:
