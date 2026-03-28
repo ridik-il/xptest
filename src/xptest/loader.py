@@ -81,8 +81,8 @@ def load(
     resources: list[ComposedResource] = []
     actual_render_mode = RenderMode.STATIC_PARSE
 
-    if xr_path and functions_path:
-        # Explicit render inputs provided — always use crossplane render
+    if xr_path and functions_path and render_mode != "offline":
+        # Explicit render inputs provided — use crossplane render
         resources = _parse_from_render(
             composition_path=composition_path,
             xr_path=xr_path,
@@ -330,84 +330,200 @@ def _run_crossplane_render(
     observed_resources_path: str | None,
     environment_config_paths: list[str],
 ) -> str:
+    global _working_render_cmd, _working_functions_variant  # noqa: PLW0603
+
     timeout_seconds = 300
     temp_files: list[str] = []
 
-    # Strategy: try the most efficient approach first (running containers),
-    # fall back to Docker runtime (slow — starts new containers each time).
-    candidate_function_paths: list[str] = []
+    # --- Fast path: reuse proven command + functions variant ---
+    if _working_render_cmd is not None and _working_functions_variant is not None:
+        fn_path = _resolve_functions_variant(
+            functions_path, _working_functions_variant, temp_files,
+        )
+        base_args = _build_render_args(
+            xr_path, composition_path, fn_path,
+            environment_config_paths, observed_resources_path,
+        )
+        cmd = [*_working_render_cmd, *base_args]
+        try:
+            result = subprocess.run(
+                cmd, check=False, capture_output=True, text=True,
+                timeout=timeout_seconds,
+            )
+            if result.returncode == 0:
+                return result.stdout
+            # If the cached variant fails (e.g. different composition structure),
+            # fall through to full discovery.
+        except FileNotFoundError:
+            raise LoadError(
+                "crossplane CLI not found. "
+                "Install Crossplane CLI to use render mode."
+            ) from None
+        except subprocess.TimeoutExpired:
+            raise LoadError(
+                f"crossplane render timed out after {timeout_seconds}s"
+            ) from None
+        finally:
+            for tf in temp_files:
+                Path(tf).unlink(missing_ok=True)
+            temp_files.clear()
 
-    # 1. Try to connect to already-running Docker containers via their IPs
-    host_dev = _rewrite_functions_for_host_development(functions_path)
-    if host_dev is not None:
-        candidate_function_paths.append(host_dev)
-        temp_files.append(host_dev)
+    # --- Discovery path: try all combinations, cache the first winner ---
 
-    # 2. Try original functions.yaml as-is (works when already in Docker network)
-    candidate_function_paths.append(functions_path)
-
-    # 3. Fallback: strip Development annotations → Docker runtime (slow but safe)
-    docker_rewrite = _rewrite_functions_for_docker_runtime(functions_path)
-    if docker_rewrite is not None:
-        candidate_function_paths.append(docker_rewrite)
-        temp_files.append(docker_rewrite)
+    # Build candidate functions.yaml variants (cached per functions_path).
+    candidate_variants = _get_functions_variants(functions_path, temp_files)
 
     try:
         last_error = ""
-        for candidate_functions_path in candidate_function_paths:
-            base_args = [xr_path, composition_path, candidate_functions_path]
-            for env_path in environment_config_paths:
-                base_args.extend(["-e", env_path])
-            if observed_resources_path:
-                base_args.append(f"--observed-resources={observed_resources_path}")
+        for variant_key, candidate_fn_path in candidate_variants:
+            base_args = _build_render_args(
+                xr_path, composition_path, candidate_fn_path,
+                environment_config_paths, observed_resources_path,
+            )
 
-            commands = [
-                ["crossplane", "render", *base_args],
-                ["crossplane", "beta", "render", *base_args],
+            cmd_prefixes = [
+                ["crossplane", "render"],
+                ["crossplane", "beta", "render"],
             ]
 
-            for cmd in commands:
+            for prefix in cmd_prefixes:
+                cmd = [*prefix, *base_args]
                 try:
                     result = subprocess.run(
-                        cmd,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout_seconds,
+                        cmd, check=False, capture_output=True,
+                        text=True, timeout=timeout_seconds,
                     )
                 except FileNotFoundError:
                     raise LoadError(
-                        "crossplane CLI not found. Install Crossplane CLI to use render mode."
+                        "crossplane CLI not found. "
+                        "Install Crossplane CLI to use render mode."
                     ) from None
                 except subprocess.TimeoutExpired:
                     raise LoadError(
-                        f"crossplane render timed out after {timeout_seconds} seconds"
+                        f"crossplane render timed out "
+                        f"after {timeout_seconds}s"
                     ) from None
 
                 if result.returncode == 0:
+                    # Cache the winning combination.
+                    _working_render_cmd = prefix
+                    _working_functions_variant = variant_key
                     return result.stdout
 
                 stderr = (result.stderr or "").lower()
-                if "unexpected argument render" in stderr or "unknown command \"beta\"" in stderr:
-                    last_error = result.stderr.strip() or result.stdout.strip()
-                    continue
-                if "unknown command \"render\"" in stderr:
-                    last_error = result.stderr.strip() or result.stdout.strip()
+                if (
+                    "unexpected argument render" in stderr
+                    or 'unknown command "beta"' in stderr
+                    or 'unknown command "render"' in stderr
+                ):
+                    last_error = (
+                        result.stderr.strip() or result.stdout.strip()
+                    )
                     continue
 
-                last_error = result.stderr.strip() or result.stdout.strip() or "unknown error"
+                last_error = (
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or "unknown error"
+                )
 
         raise LoadError(
             "crossplane render failed: "
-            f"{last_error or 'render command is unavailable in this Crossplane CLI version'}"
+            + (
+                last_error
+                or "render command is unavailable in this "
+                "Crossplane CLI version"
+            )
         )
     finally:
         for tf in temp_files:
             Path(tf).unlink(missing_ok=True)
 
 
+def _build_render_args(
+    xr_path: str,
+    composition_path: str,
+    functions_path: str,
+    environment_config_paths: list[str],
+    observed_resources_path: str | None,
+) -> list[str]:
+    """Build the positional + optional args for a crossplane render call."""
+    args = [xr_path, composition_path, functions_path]
+    for env_path in environment_config_paths:
+        args.extend(["-e", env_path])
+    if observed_resources_path:
+        args.append(f"--observed-resources={observed_resources_path}")
+    return args
+
+
+def _get_functions_variants(
+    functions_path: str,
+    temp_files: list[str],
+) -> list[tuple[str, str]]:
+    """Return candidate (variant_key, path) pairs, using cached rewrites.
+
+    The result is deterministic for a given functions_path and only
+    performs file I/O and Docker inspect calls on the first invocation.
+    """
+    if functions_path in _functions_rewrite_cache:
+        host_dev, docker_rt = _functions_rewrite_cache[functions_path]
+    else:
+        host_dev = _rewrite_functions_for_host_development(functions_path)
+        docker_rt = _rewrite_functions_for_docker_runtime(functions_path)
+        _functions_rewrite_cache[functions_path] = (host_dev, docker_rt)
+
+    variants: list[tuple[str, str]] = []
+    if host_dev is not None:
+        variants.append(("host_dev", host_dev))
+        temp_files.append(host_dev)
+    variants.append(("original", functions_path))
+    if docker_rt is not None:
+        variants.append(("docker_rt", docker_rt))
+        temp_files.append(docker_rt)
+    return variants
+
+
+def _resolve_functions_variant(
+    functions_path: str,
+    variant_key: str,
+    temp_files: list[str],
+) -> str:
+    """Resolve a cached variant key back to a usable file path."""
+    if variant_key == "original":
+        return functions_path
+
+    cached = _functions_rewrite_cache.get(functions_path)
+    if cached is None:
+        # Re-populate cache (shouldn't normally happen).
+        host_dev = _rewrite_functions_for_host_development(functions_path)
+        docker_rt = _rewrite_functions_for_docker_runtime(functions_path)
+        _functions_rewrite_cache[functions_path] = (host_dev, docker_rt)
+        cached = (host_dev, docker_rt)
+
+    host_dev, docker_rt = cached
+    if variant_key == "host_dev" and host_dev is not None:
+        temp_files.append(host_dev)
+        return host_dev
+    if variant_key == "docker_rt" and docker_rt is not None:
+        temp_files.append(docker_rt)
+        return docker_rt
+
+    return functions_path
+
+
 # Cache for Docker container IPs — looked up once per process.
 _container_ip_cache: dict[str, str] = {}
+
+# Cache for functions.yaml rewrite results — avoids re-reading/re-parsing
+# the same file and re-calling `docker inspect` on every render.
+_functions_rewrite_cache: dict[str, tuple[str | None, str | None]] = {}
+
+# Cache for the working crossplane render command variant.
+# After the first successful render we know which command shape works
+# ("crossplane render" vs "crossplane beta render") and which functions.yaml
+# variant to use.  Subsequent renders skip the other candidates.
+_working_render_cmd: list[str] | None = None
+_working_functions_variant: str | None = None
 
 
 def _get_container_ip(container_name: str) -> str | None:

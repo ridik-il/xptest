@@ -243,6 +243,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="exploration-report.json",
         help="Output path for exploration report JSON (default: exploration-report.json).",
     )
+    exp.add_argument(
+        "--render-mode",
+        choices=["auto", "render", "offline"],
+        default="auto",
+        help="Rendering mode for go-templating compositions (default: auto).",
+    )
     exp.set_defaults(func=_cmd_explore)
 
     # --- scan ---
@@ -413,6 +419,10 @@ def _cmd_drift(args: argparse.Namespace) -> int:
 
 def _cmd_explore(args: argparse.Namespace) -> int:
     """Run Behavioral Exploration Module: input synthesis → render → analysis."""
+    import time as _time
+
+    from xptest import progress
+
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
@@ -446,11 +456,27 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     )
     from xptest.exploration.template_coverage import measure_coverage
 
+    progress.init()
+    render_mode = getattr(args, "render_mode", "auto")
+
+    # Early availability check: when render_mode is "auto" and crossplane
+    # CLI is not on PATH, fall back to offline immediately instead of
+    # timing out on the first render attempt.
+    if render_mode == "auto":
+        from xptest.render import crossplane_cli_available
+
+        if not crossplane_cli_available():
+            progress.step(
+                "crossplane CLI not found — falling back to offline mode"
+            )
+            render_mode = "offline"
+
     max_inputs = args.max_inputs or cfg.max_exploration_inputs or 100
     baseline_path = args.baseline or cfg.baseline_path
     cov_threshold = args.coverage_threshold or cfg.coverage_threshold
 
     # Phase 1: Generate inputs
+    progress.phase("Input synthesis")
     if args.xr:
         # Single explicit XR — use it directly
         candidates = [("explicit-xr", None)]
@@ -462,14 +488,17 @@ def _cmd_explore(args: argparse.Namespace) -> int:
             sys.stderr.write("xptest: no input candidates generated from XRD\n")
             return 1
 
-    sys.stderr.write(f"xptest explore: {len(candidates)} input(s) to render\n")
+    progress.step(f"{len(candidates)} input(s) to render")
 
     # Phase 2: Render loop — build snapshots
+    progress.phase(f"Rendering {len(candidates)} input(s)")
+    t0_render = _time.monotonic()
     all_findings: list[Finding] = []
     snapshots: list = []
     first_obj = None
 
     for idx, (label, xr_doc) in enumerate(candidates):
+        progress.combo(idx, len(candidates), label)
         if use_explicit_xr:
             xr_path = args.xr
         else:
@@ -488,6 +517,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                 functions_path=args.functions,
                 observed_resources_path=args.observed_resources,
                 environment_config_paths=cfg.environment_config_paths,
+                render_mode=render_mode,
             )
             if first_obj is None:
                 first_obj = obj
@@ -502,7 +532,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
             snapshots.append(snapshot)
 
         except LoadError as exc:
-            sys.stderr.write(f"xptest: render error ({label}) — {exc}\n")
+            progress.warn(f"render error ({label}): {exc}")
             all_findings.append(Finding(
                 layer=7,
                 rule="explore/render-error",
@@ -518,22 +548,22 @@ def _cmd_explore(args: argparse.Namespace) -> int:
             if not use_explicit_xr:
                 Path(xr_path).unlink(missing_ok=True)
 
+    t_render = _time.monotonic() - t0_render
     if not snapshots:
-        sys.stderr.write("xptest: no successful renders — cannot proceed\n")
+        progress.warn("no successful renders — cannot proceed")
         return layer4.write(all_findings, output_path=args.output)
 
-    sys.stderr.write(f"xptest explore: {len(snapshots)} render(s) succeeded\n")
+    progress.done(f"{len(snapshots)} render(s) succeeded in {t_render:.2f}s")
 
     # Phase 3: Breaking change detection
+    progress.phase("Analysis")
     if baseline_path:
         baseline = load_baseline(baseline_path)
         if baseline:
             bc_findings = detect_breaking_changes(baseline, snapshots)
             all_findings.extend(bc_findings)
             if bc_findings:
-                sys.stderr.write(
-                    f"xptest explore: {len(bc_findings)} breaking change(s) detected\n"
-                )
+                progress.step(f"{len(bc_findings)} breaking change(s) detected")
 
     # Phase 4: Resource preservation invariants
     declared_gvks = collect_declared_gvks(snapshots)
@@ -547,14 +577,18 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     min_count = compute_baseline_min_count(snapshots)
     min_count_findings = check_minimum_resource_count(min_count, snapshots)
     all_findings.extend(min_count_findings)
+    inv_count = len(type_cov_findings) + len(dp_findings) + len(min_count_findings)
+    progress.step(f"Invariant checks: {inv_count} findings")
 
     # Phase 5: Fault injection
     fi_findings: list[Finding] = []
     fault_sweep_count = 0
     if args.fault_inject and first_obj is not None:
+        progress.phase("Fault injection")
         from xptest.exploration.fault_injection import build_fault_sweep_order
 
         fault_sweep_count = len(build_fault_sweep_order(first_obj))
+        progress.step(f"{fault_sweep_count} fault target(s)")
         seed_xr = args.xr
         if not seed_xr and candidates:
             _, first_doc = candidates[0]
@@ -573,15 +607,13 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                     xr_path=seed_xr,
                     functions_path=args.functions,
                     environment_config_paths=cfg.environment_config_paths,
+                    render_mode=render_mode,
                 )
                 all_findings.extend(fi_findings)
                 snapshots.extend(fi_snapshots)
-                if fi_findings:
-                    sys.stderr.write(
-                        f"xptest explore: {len(fi_findings)} fault injection finding(s)\n"
-                    )
+                progress.step(f"{len(fi_findings)} fault injection finding(s)")
             except Exception as exc:
-                sys.stderr.write(f"xptest: fault injection error — {exc}\n")
+                progress.warn(f"fault injection error: {exc}")
             finally:
                 if not args.xr and seed_xr:
                     Path(seed_xr).unlink(missing_ok=True)
@@ -627,15 +659,14 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                         functions_path=args.functions,
                         observed_resources_path=args.observed_resources,
                         environment_config_paths=cfg.environment_config_paths,
+                        render_mode=render_mode,
                     )
                     case_id = f"extend-{idx}:{label}"
                     input_flat = flatten_input_spec(xr_doc.get("spec", {}), "spec")
                     snapshot = build_snapshot(obj, case_id=case_id, input_flat=input_flat)
                     snapshots.append(snapshot)
                 except LoadError as exc:
-                    sys.stderr.write(
-                        f"xptest: extend render error ({label}) — {exc}\n"
-                    )
+                    progress.warn(f"extend render error ({label}): {exc}")
                 finally:
                     Path(ext_xr_path).unlink(missing_ok=True)
 
@@ -662,11 +693,13 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     mutation_report = compute_mutation_score(fault_sweep_count, fi_findings)
 
     # Determinism score — re-render first few inputs and compare
+    progress.phase("Determinism check")
     determinism_report: dict[str, Any] = {
         "total_inputs": 0, "identical_outputs": 0, "determinism_score": 1.0,
     }
     det_limit = min(5, len(candidates))
     if det_limit > 0 and not use_explicit_xr:
+        progress.step(f"Re-rendering {det_limit} input(s) for determinism")
         run_b_snapshots: list = []
         for idx in range(det_limit):
             label, xr_doc = candidates[idx]
@@ -684,6 +717,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                     functions_path=args.functions,
                     observed_resources_path=args.observed_resources,
                     environment_config_paths=cfg.environment_config_paths,
+                    render_mode=render_mode,
                 )
                 det_case = f"det-{idx}:{label}"
                 det_flat = flatten_input_spec(xr_doc.get("spec", {}), "spec")
@@ -703,7 +737,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     if args.save_baseline and first_obj is not None:
         save_path = baseline_path or "baselines/baseline.json"
         save_baseline(snapshots, first_obj.composition_name, save_path)
-        sys.stderr.write(f"xptest explore: baseline saved to {save_path}\n")
+        progress.step(f"Baseline saved to {save_path}")
 
     # Build report
     report_sections: dict[str, Any] = {
@@ -760,6 +794,18 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
     from xptest import progress
 
     progress.init()
+
+    # Early availability check: fall back to offline when crossplane CLI
+    # is absent so we don't pay a subprocess timeout per combination.
+    if args.render_mode == "auto":
+        from xptest.render import crossplane_cli_available
+
+        if not crossplane_cli_available():
+            progress.step(
+                "crossplane CLI not found — falling back to offline mode"
+            )
+            args.render_mode = "offline"
+
     progress.phase("Generating XR parameter combinations")
 
     candidates = _generate_auto_xr_candidates(args.xrd, max_count=args.auto_xr_combinations)
@@ -821,6 +867,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
                 functions_path=args.functions,
                 observed_resources_path=args.observed_resources,
                 environment_config_paths=env_config_paths,
+                render_mode=args.render_mode,
                 _comp_doc=comp_doc,
                 _xrd_doc=xrd_doc,
             )
@@ -1384,6 +1431,7 @@ def _chaos_structure_key(snapshot) -> str:
 def _cmd_scan(args: argparse.Namespace) -> int:
     import time
 
+    from xptest import progress
     from xptest.cache import load_crd_bundle
     from xptest.package import discover_package
 
@@ -1393,9 +1441,20 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         sys.stderr.write(f"xptest: config error — {exc}\n")
         return 1
 
-    scan_start = time.monotonic()
+    progress.init()
+
+    # Early availability check for auto render mode.
+    if args.render_mode == "auto":
+        from xptest.render import crossplane_cli_available
+
+        if not crossplane_cli_available():
+            progress.step(
+                "crossplane CLI not found — falling back to offline mode"
+            )
+            args.render_mode = "offline"
 
     # Discover compositions and XRDs
+    progress.phase("Discovering compositions")
     result = discover_package(
         root=args.root,
         functions_path=args.functions,
@@ -1403,35 +1462,45 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     )
 
     if not result.entries:
-        sys.stderr.write(
-            f"xptest scan: no Composition+XRD pairs found under '{args.root}'\n"
+        progress.warn(
+            f"no Composition+XRD pairs found under '{args.root}'"
         )
         if result.unmatched_compositions:
-            sys.stderr.write(
-                f"  Unmatched compositions: {len(result.unmatched_compositions)}\n"
+            progress.step(
+                f"Unmatched compositions: "
+                f"{len(result.unmatched_compositions)}"
             )
         if result.unmatched_xrds:
-            sys.stderr.write(
-                f"  Unmatched XRDs: {len(result.unmatched_xrds)}\n"
+            progress.step(
+                f"Unmatched XRDs: {len(result.unmatched_xrds)}"
             )
         return 1
 
-    print(
-        f"Discovered {len(result.entries)} composition(s) "
+    progress.step(
+        f"{len(result.entries)} composition(s) found "
         f"in {result.scan_duration_s:.2f}s"
     )
+    if result.unmatched_compositions:
+        progress.step(
+            f"{len(result.unmatched_compositions)} unmatched "
+            f"composition(s) skipped"
+        )
 
     # Load CRD bundle once for all compositions
     crd_cache = load_crd_bundle(cfg.crd_bundle_path)
 
     # Validate each composition
+    progress.phase(f"Validating {len(result.entries)} composition(s)")
     composition_reports: list[dict[str, Any]] = []
     total_findings = 0
     has_critical = False
+    pass_count = 0
+    fail_count = 0
+    error_count = 0
 
-    for entry in result.entries:
+    for idx, entry in enumerate(result.entries):
         comp_start = time.monotonic()
-        print(f"\n  Validating: {entry.composition_name} ...")
+        progress.combo(idx, len(result.entries), entry.composition_name)
 
         try:
             obj = load(
@@ -1454,7 +1523,8 @@ def _cmd_scan(args: argparse.Namespace) -> int:
                 "duration_s": time.monotonic() - comp_start,
             }
             composition_reports.append(comp_report)
-            sys.stderr.write(f"    ERROR: {exc}\n")
+            error_count += 1
+            progress.warn(f"load error: {exc}")
             continue
 
         vr = run_validations(
@@ -1498,15 +1568,18 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         )
         if critical_count:
             has_critical = True
+            fail_count += 1
+        else:
+            pass_count += 1
 
         status = "PASS" if not critical_count else "FAIL"
-        print(
-            f"    [{status}] {len(finding_dicts)} findings "
-            f"(CRITICAL={critical_count}, WARNING={warning_count}) "
-            f"in {comp_duration:.2f}s"
+        progress.step(
+            f"  [{status}] {len(finding_dicts)} findings "
+            f"(C={critical_count} W={warning_count}) "
+            f"{comp_duration:.2f}s"
         )
 
-    total_duration = time.monotonic() - scan_start
+    total_duration = time.monotonic() - progress._start
 
     # Write report
     report = {
@@ -1523,11 +1596,12 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         json.dumps(report, indent=2) + "\n"
     )
 
-    print("\n=== Scan Summary ===")
-    print(f"  Compositions: {len(result.entries)}")
-    print(f"  Total findings: {total_findings}")
-    print(f"  Duration: {total_duration:.2f}s")
-    print(f"  Report: {args.output}")
+    progress.phase("Scan complete")
+    progress.step(f"Compositions: {len(result.entries)}")
+    progress.step(f"Pass: {pass_count}  Fail: {fail_count}  Error: {error_count}")
+    progress.step(f"Total findings: {total_findings}")
+    progress.step(f"Duration: {total_duration:.2f}s")
+    progress.step(f"Report: {args.output}")
 
     return 1 if has_critical else 0
 

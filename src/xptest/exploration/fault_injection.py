@@ -129,6 +129,7 @@ def run_fault_injection(
     functions_path: str,
     environment_config_paths: list[str] | None = None,
     healthy_status: dict[str, dict[str, Any]] | None = None,
+    render_mode: str = "auto",
 ) -> tuple[list[Finding], list[RenderedGraphSnapshot]]:
     """Execute fault injection sweep and return findings + fault snapshots."""
     from xptest.loader import load as loader_load
@@ -151,6 +152,7 @@ def run_fault_injection(
                 functions_path=functions_path,
                 observed_resources_path=fault_path,
                 environment_config_paths=environment_config_paths or [],
+                render_mode=render_mode,
             )
 
             case_id = f"fault|{target_name}"

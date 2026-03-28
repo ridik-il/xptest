@@ -437,6 +437,81 @@ spec:
         assert "role" in names
         assert "default-policy" in names
 
+    def test_offline_mode_skips_render_even_with_xr_and_functions(self, tmp_path):
+        """render_mode='offline' with xr_path + functions_path should NOT call subprocess."""
+        comp_path, xrd_path = self._write_files(tmp_path)
+        xr_path = tmp_path / "xr.yaml"
+        xr_path.write_text(yaml.dump({
+            "apiVersion": "example.org/v1alpha1",
+            "kind": "XTest",
+            "metadata": {"name": "test-xr"},
+            "spec": {"region": "us-east-1"},
+        }))
+        fn_path = tmp_path / "functions.yaml"
+        fn_path.write_text(yaml.dump({
+            "apiVersion": "pkg.crossplane.io/v1beta1",
+            "kind": "Function",
+            "metadata": {"name": "function-go-templating"},
+        }))
+
+        with patch("xptest.render.subprocess.run") as mock_run:
+            obj = load(
+                comp_path, xrd_path,
+                xr_path=str(xr_path),
+                functions_path=str(fn_path),
+                render_mode="offline",
+            )
+            # subprocess.run should NOT have been called
+            mock_run.assert_not_called()
+
+        assert obj.render_mode == RenderMode.DEGRADED_PARSE
+
+    def test_render_caches_working_command_variant(self, tmp_path):
+        """After first successful render, subsequent renders reuse the same command."""
+        import xptest.loader as loader_mod
+
+        comp_path, xrd_path = self._write_files(tmp_path)
+
+        rendered_output = (
+            "---\napiVersion: iam.aws.crossplane.io/v1beta1\n"
+            "kind: Role\nmetadata:\n  name: test-role\n"
+            "  annotations:\n"
+            "    crossplane.io/composition-resource-name: role\n"
+            "spec:\n  forProvider:\n"
+            "    assumeRolePolicyDocument: '{}'\n"
+        )
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = rendered_output
+
+        # Reset caches before test
+        saved_cmd = loader_mod._working_render_cmd
+        saved_fn = loader_mod._working_functions_variant
+        saved_rewrite = loader_mod._functions_rewrite_cache.copy()
+        loader_mod._working_render_cmd = None
+        loader_mod._working_functions_variant = None
+        loader_mod._functions_rewrite_cache.clear()
+
+        try:
+            with patch(
+                "xptest.loader.subprocess.run", return_value=mock_result
+            ) as mock_run:
+                # First render — discovery path
+                load(comp_path, xrd_path, render_mode="auto")
+                first_call_count = mock_run.call_count
+
+                # Second render — should use cached command variant
+                load(comp_path, xrd_path, render_mode="auto")
+                second_call_count = mock_run.call_count - first_call_count
+
+            # Second render should make exactly 1 subprocess call
+            # (the cached fast path), not the full discovery sweep.
+            assert second_call_count == 1
+        finally:
+            loader_mod._working_render_cmd = saved_cmd
+            loader_mod._working_functions_variant = saved_fn
+            loader_mod._functions_rewrite_cache = saved_rewrite
+
     def test_render_unavailable_falls_back_to_degraded(self, tmp_path):
         """When crossplane CLI is missing, falls back to degraded parse."""
         comp_path, xrd_path = self._write_files(tmp_path)
