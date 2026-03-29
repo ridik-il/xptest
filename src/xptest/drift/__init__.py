@@ -19,7 +19,7 @@ from xptest.drift.aws_checker import (
     check_vpcs,
 )
 from xptest.drift.models import DriftError, DriftFinding
-from xptest.models import CompositionObject
+from xptest.models import CompositionObject, Severity
 
 # Resource kinds handled by each checker
 _VPC_KINDS = {"VPC", "Subnet", "SecurityGroup", "RouteTable"}
@@ -77,6 +77,7 @@ def run_with_timing(
     Returns a DriftReport containing findings and timing metrics.
     """
     t_start = time.monotonic()
+    findings: list[DriftFinding] = []
 
     if session is None:
         boto3 = _import_boto3()
@@ -107,8 +108,6 @@ def run_with_timing(
     s3_resources = [r for r in resources if r.kind in _S3_KINDS]
     rds_resources = [r for r in resources if r.kind in _RDS_KINDS]
     iam_resources = [r for r in resources if r.kind in _IAM_KINDS]
-
-    findings: list[DriftFinding] = []
     first_finding_time: float | None = None
     last_finding_time: float | None = None
 
@@ -149,3 +148,42 @@ def run_with_timing(
         ),
         resources_checked=len(resources),
     )
+
+
+def _warn_static_credentials(
+    identity: dict[str, str],
+    findings: list[DriftFinding],
+) -> None:
+    """Emit a WARNING when credentials appear to be long-lived IAM user keys.
+
+    OIDC / AssumeRole sessions produce ARNs containing `:assumed-role/` or
+    `:federated-user/`.  Plain IAM user keys produce ARNs like
+    `arn:aws:iam::123456:user/my-user`.  Static keys are a security risk in
+    CI pipelines and should be replaced with short-lived OIDC tokens.
+    """
+    arn = identity.get("Arn", "")
+    if not arn:
+        return
+    # assumed-role and federated-user indicate temporary credentials
+    if ":assumed-role/" in arn or ":federated-user/" in arn:
+        return
+    if ":user/" in arn or ":root" in arn:
+        findings.append(
+            DriftFinding(
+                layer=4,
+                rule="drift/static-credentials",
+                resource="",
+                path="AWS_ACCESS_KEY_ID",
+                severity=Severity.WARNING,
+                message=(
+                    f"Drift detection is using static IAM credentials ({arn}). "
+                    "Static keys do not expire and pose a security risk, "
+                    "especially in CI/CD pipelines."
+                ),
+                remediation=(
+                    "Use OIDC federation (AssumeRoleWithWebIdentity) or "
+                    "IAM Roles for Service Accounts to obtain short-lived "
+                    "credentials instead of long-lived access keys."
+                ),
+            )
+        )
