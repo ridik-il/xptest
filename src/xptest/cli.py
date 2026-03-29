@@ -148,7 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     val.add_argument(
         "--halt-on-critical",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Stop pipeline on first CRITICAL finding (default: true).",
     )
@@ -224,7 +224,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     exp.add_argument(
         "--fault-inject",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Run fault injection sweep (default: true).",
     )
@@ -277,7 +277,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scan.add_argument(
         "--halt-on-critical",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Stop pipeline on first CRITICAL finding per composition.",
     )
@@ -1579,7 +1579,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
             f"{comp_duration:.2f}s"
         )
 
-    total_duration = time.monotonic() - progress._start
+    total_duration = progress.elapsed()
 
     # Write report
     report = {

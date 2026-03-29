@@ -58,8 +58,14 @@ def _run_pipeline(
 
             l3_findings = layer3.run(obj, config)
             findings.extend(l3_findings)
-        except Exception:
-            pass  # OPA not available — skip L3
+        except ImportError:
+            pass  # OPA module not installed — skip L3
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("xptest.evaluate").warning(
+                "Layer 3 evaluation failed: %s", exc,
+            )
 
     return [
         {
@@ -133,7 +139,7 @@ def _compute_additional_metrics(
     )
     from xptest.logic.models import RenderedGraphSnapshot
     from xptest.logic.snapshot import build_snapshot
-    from xptest.models import Finding
+    from xptest.models import Finding, Severity
 
     result: dict = {}
 
@@ -156,7 +162,12 @@ def _compute_additional_metrics(
             result["tway_coverage"] = {
                 "t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0,
             }
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("xptest.evaluate").warning(
+            "t-way coverage computation failed: %s", exc,
+        )
         result["tway_coverage"] = {
             "t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0,
         }
@@ -174,7 +185,7 @@ def _compute_additional_metrics(
                         rule=rule,
                         resource=fd.get("resource", ""),
                         path=fd.get("path", ""),
-                        severity=Finding.__dataclass_fields__["severity"].default,
+                        severity=Severity(fd.get("severity", "WARNING")),
                         message="",
                         remediation="",
                     )

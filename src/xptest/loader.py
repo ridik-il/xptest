@@ -338,7 +338,7 @@ def _run_crossplane_render(
     # --- Fast path: reuse proven command + functions variant ---
     if _working_render_cmd is not None and _working_functions_variant is not None:
         fn_path = _resolve_functions_variant(
-            functions_path, _working_functions_variant, temp_files,
+            functions_path, _working_functions_variant,
         )
         base_args = _build_render_args(
             xr_path, composition_path, fn_path,
@@ -364,8 +364,6 @@ def _run_crossplane_render(
                 f"crossplane render timed out after {timeout_seconds}s"
             ) from None
         finally:
-            for tf in temp_files:
-                Path(tf).unlink(missing_ok=True)
             temp_files.clear()
 
     # --- Discovery path: try all combinations, cache the first winner ---
@@ -436,8 +434,17 @@ def _run_crossplane_render(
             )
         )
     finally:
+        # Only clean up temp files that are NOT in the rewrite cache.
+        # Cached rewrite files persist across render calls.
+        cached_paths: set[str] = set()
+        for host_dev, docker_rt in _functions_rewrite_cache.values():
+            if host_dev:
+                cached_paths.add(host_dev)
+            if docker_rt:
+                cached_paths.add(docker_rt)
         for tf in temp_files:
-            Path(tf).unlink(missing_ok=True)
+            if tf not in cached_paths:
+                Path(tf).unlink(missing_ok=True)
 
 
 def _build_render_args(
@@ -465,7 +472,8 @@ def _get_functions_variants(
     The result is deterministic for a given functions_path and only
     performs file I/O and Docker inspect calls on the first invocation.
     """
-    if functions_path in _functions_rewrite_cache:
+    is_cached = functions_path in _functions_rewrite_cache
+    if is_cached:
         host_dev, docker_rt = _functions_rewrite_cache[functions_path]
     else:
         host_dev = _rewrite_functions_for_host_development(functions_path)
@@ -475,20 +483,26 @@ def _get_functions_variants(
     variants: list[tuple[str, str]] = []
     if host_dev is not None:
         variants.append(("host_dev", host_dev))
-        temp_files.append(host_dev)
+        # Only track for cleanup on first creation; cached files persist.
+        if not is_cached:
+            temp_files.append(host_dev)
     variants.append(("original", functions_path))
     if docker_rt is not None:
         variants.append(("docker_rt", docker_rt))
-        temp_files.append(docker_rt)
+        if not is_cached:
+            temp_files.append(docker_rt)
     return variants
 
 
 def _resolve_functions_variant(
     functions_path: str,
     variant_key: str,
-    temp_files: list[str],
 ) -> str:
-    """Resolve a cached variant key back to a usable file path."""
+    """Resolve a cached variant key back to a usable file path.
+
+    Cached rewrite files are NOT added to temp_files because they
+    persist across render calls for the lifetime of the process.
+    """
     if variant_key == "original":
         return functions_path
 
@@ -502,10 +516,8 @@ def _resolve_functions_variant(
 
     host_dev, docker_rt = cached
     if variant_key == "host_dev" and host_dev is not None:
-        temp_files.append(host_dev)
         return host_dev
     if variant_key == "docker_rt" and docker_rt is not None:
-        temp_files.append(docker_rt)
         return docker_rt
 
     return functions_path
