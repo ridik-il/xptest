@@ -152,8 +152,9 @@ def generate_perturbations(
             from collections import Counter
 
             fanout = Counter(src for src, _dst in snapshot.edges)
-            if fanout:
-                hub_id = fanout.most_common(1)[0][0]
+            top = fanout.most_common(1)
+            if top:
+                hub_id = top[0][0]
                 scenarios.append(
                     PerturbationScenario(
                         perturbation_id="R6-hub-dependency-removal",
@@ -353,7 +354,11 @@ def analyze_destructive_change(
 
     should_flag_partial = False
     if expected_removed:
-        expected_after = len(base_ids - expected_removed)
+        # apply_perturbation also removes 2-hop neighbors of targets;
+        # account for that so we don't flag expected cascade as partial output
+        expanded = _expand_related_ids(baseline.edges, expected_removed, max_hops=2)
+        all_expected_gone = expected_removed | expanded
+        expected_after = len(base_ids - all_expected_gone)
         if len(mutated.resources) < expected_after:
             should_flag_partial = True
     elif len(mutated.resources) < len(baseline.resources) and len(mutated.resources) <= 1:

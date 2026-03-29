@@ -195,11 +195,21 @@ def _compute_additional_metrics(
             try:
                 obj_a = load(str(yaml_file), xrd_path)
                 obj_b = load(str(yaml_file), xrd_path)
-                snap_a = build_snapshot(obj_a, case_id=f"det-a-{yaml_file.stem}")
-                snap_b = build_snapshot(obj_b, case_id=f"det-b-{yaml_file.stem}")
+                no_input: dict[str, object] = {}
+                snap_a = build_snapshot(
+                    obj_a, case_id=f"det-a-{yaml_file.stem}", input_flat=no_input,
+                )
+                snap_b = build_snapshot(
+                    obj_b, case_id=f"det-b-{yaml_file.stem}", input_flat=no_input,
+                )
                 run_a.append(snap_a)
                 run_b.append(snap_b)
-            except Exception:
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("xptest.evaluate").debug(
+                    "determinism load failed for %s: %s", yaml_file.stem, exc,
+                )
                 continue
     if run_a and len(run_a) == len(run_b):
         result["determinism_score"] = compute_determinism_score(run_a, run_b)

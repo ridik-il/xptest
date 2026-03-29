@@ -27,7 +27,7 @@ class CrdBundleCache:
         self,
         known_kinds: set[tuple[str, str]],
         crd_schemas: dict[tuple[str, str], dict[str, Any]],
-        atprovider_schemas: dict[tuple[str, str], set[str]],
+        atprovider_schemas: dict[tuple[str, str], dict[str, Any]],
         bundle_path: str,
     ) -> None:
         self.known_kinds = known_kinds
@@ -53,7 +53,7 @@ def load_crd_bundle(bundle_path: str) -> CrdBundleCache | None:
 
     known_kinds: set[tuple[str, str]] = set()
     crd_schemas: dict[tuple[str, str], dict[str, Any]] = {}
-    atprovider_schemas: dict[tuple[str, str], set[str]] = {}
+    atprovider_schemas: dict[tuple[str, str], dict[str, Any]] = {}
 
     for crd_file in bundle.rglob("*.yaml"):
         try:
@@ -90,7 +90,7 @@ def load_crd_bundle(bundle_path: str) -> CrdBundleCache | None:
                     .get("properties", {})
                 )
                 if at_provider_props:
-                    atprovider_schemas[key] = set(at_provider_props.keys())
+                    atprovider_schemas[key] = at_provider_props
 
         except Exception:  # noqa: BLE001
             continue

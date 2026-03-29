@@ -26,8 +26,9 @@ from xptest.models import ComposedResource, CompositionObject, Finding, Severity
 # A valid Kubernetes/Crossplane field path: dot-separated identifiers.
 # Segments may contain hyphens (common in resource names, e.g. "main-vpc").
 # Optionally includes array indices e.g. "spec.forProvider.subnets[0].id"
+# or array wildcards e.g. "spec.forProvider.tags[*].key"
 _FIELD_PATH_RE = re.compile(
-    r"^[a-zA-Z_][a-zA-Z0-9_-]*(\[\d+\])?(\.[a-zA-Z_][a-zA-Z0-9_-]*(\[\d+\])?)*$"
+    r"^[a-zA-Z_][a-zA-Z0-9_-]*(\[(\d+|\*)\])?(\.[a-zA-Z_][a-zA-Z0-9_-]*(\[(\d+|\*)\])?)*$"
 )
 
 # Patch types that carry fromFieldPath / toFieldPath values.

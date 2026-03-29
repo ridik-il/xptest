@@ -266,8 +266,16 @@ def _run_opa_query(
         # OPA returns non-zero for undefined results (no violations) — that's OK
         if "undefined" in result.stderr.lower():
             return []
+        # Filter out warning lines (version notices, deprecation) from real errors
+        stderr_lines = result.stderr.strip().splitlines()
+        error_lines = [
+            ln for ln in stderr_lines
+            if not ln.lower().startswith("warning:")
+            and "deprecated" not in ln.lower()
+        ]
+        error_msg = "\n".join(error_lines).strip() or result.stderr.strip()
         raise OpaError(
-            f"OPA evaluation failed (exit {result.returncode}): {result.stderr.strip()}"
+            f"OPA evaluation failed (exit {result.returncode}): {error_msg}"
         )
 
     try:

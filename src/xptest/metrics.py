@@ -75,35 +75,25 @@ def compare(
 
     Returns (tp, fp, fn, severity_mismatches).
     """
-    # Build a set of (layer, rule) tuples for matching
-    expected_keys = [(e["layer"], e["rule"]) for e in expected]
-    actual_keys = [(a["layer"], a["rule"]) for a in actual]
-
-    # For expected entries that appear multiple times, track counts
-    expected_remaining = list(expected_keys)
-    actual_remaining = list(actual_keys)
+    matched_expected = [False] * len(expected)
 
     tp = 0
     severity_mismatches = 0
 
-    # Match actual findings to expected
     for a in actual:
         a_key = (a["layer"], a["rule"])
-        matched = False
         for i, e in enumerate(expected):
-            e_key = (e["layer"], e["rule"])
-            if a_key == e_key and e_key in expected_remaining:
-                expected_remaining.remove(e_key)
+            if matched_expected[i]:
+                continue
+            if (e["layer"], e["rule"]) == a_key:
+                matched_expected[i] = True
                 tp += 1
                 if a.get("severity") != e.get("severity"):
                     severity_mismatches += 1
-                matched = True
                 break
-        if matched and a_key in actual_remaining:
-            actual_remaining.remove(a_key)
 
-    fn = len(expected_remaining)
-    fp = len(actual_remaining)
+    fn = sum(1 for m in matched_expected if not m)
+    fp = len(actual) - tp
 
     return tp, fp, fn, severity_mismatches
 

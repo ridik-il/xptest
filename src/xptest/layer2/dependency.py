@@ -208,8 +208,11 @@ def _check_cycles(
         list(ts.static_order())
         return []
     except graphlib.CycleError as exc:
-        cycle_nodes = exc.args[1] if len(exc.args) > 1 else []
-        cycle_str = " -> ".join(str(n) for n in cycle_nodes)
+        try:
+            cycle_nodes = list(exc.args[1]) if len(exc.args) > 1 else []
+        except (TypeError, IndexError):
+            cycle_nodes = []
+        cycle_str = " -> ".join(str(n) for n in cycle_nodes) if cycle_nodes else str(exc)
         return [
             Finding(
                 layer=2,
@@ -318,21 +321,21 @@ def _check_reference_completeness(
 
             for fp in paths_to_check:
                 parts = fp.split(".")
-                # Expect: status.atProvider.<resourceName>.<field>
+                # Expect: status.atProvider.<resourceName>.<field>[.<nested>...]
                 if len(parts) < 4:
                     continue
                 if parts[0] != "status" or parts[1] != "atProvider":
                     continue
                 producer_name = parts[2]
-                field_name = parts[3]
                 producer = resource_index.get(producer_name)
                 if producer is None:
                     continue  # dangling reference; handled by L2-03
                 key = (producer.api_version, producer.kind)
-                schema_fields = atprovider_schemas.get(key)
-                if schema_fields is None:
+                schema_props = atprovider_schemas.get(key)
+                if schema_props is None:
                     continue  # CRD not in bundle; skip
-                if field_name not in schema_fields:
+                bad_segment = _walk_schema_path(schema_props, parts[3:])
+                if bad_segment is not None:
                     findings.append(
                         Finding(
                             layer=2,
@@ -341,7 +344,7 @@ def _check_reference_completeness(
                             path=f"patches[fromFieldPath={fp}]",
                             severity=Severity.CRITICAL,
                             message=(
-                                f"Field '{field_name}' is not present in "
+                                f"Field '{bad_segment}' is not present in "
                                 f"status.atProvider of '{producer.kind}' "
                                 f"({producer.api_version}) according to the CRD bundle. "
                                 f"Patch in '{consumer.name}' references this field."
@@ -356,9 +359,31 @@ def _check_reference_completeness(
     return findings
 
 
-def _load_atprovider_schemas(bundle: Path) -> dict[tuple[str, str], set[str]]:
-    """Return a map of (apiVersion, kind) -> set of top-level atProvider field names."""
-    result: dict[tuple[str, str], set[str]] = {}
+def _walk_schema_path(
+    properties: dict[str, Any],
+    segments: list[str],
+) -> str | None:
+    """Walk nested schema properties along *segments*.
+
+    Returns the first segment that does not exist in the schema, or None
+    if every segment resolves successfully.  Stops descending when a
+    schema node has no nested ``properties`` (e.g. a scalar leaf).
+    """
+    current = properties
+    for seg in segments:
+        if seg not in current:
+            return seg
+        # Descend into nested properties if they exist
+        nested = current[seg].get("properties") if isinstance(current[seg], dict) else None
+        if nested is None:
+            break  # leaf — remaining segments cannot be validated
+        current = nested
+    return None
+
+
+def _load_atprovider_schemas(bundle: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """Return a map of (apiVersion, kind) -> atProvider properties dict."""
+    result: dict[tuple[str, str], dict[str, Any]] = {}
     for crd_file in bundle.rglob("*.yaml"):
         try:
             with crd_file.open() as fh:
@@ -379,7 +404,7 @@ def _load_atprovider_schemas(bundle: Path) -> dict[tuple[str, str], set[str]]:
                     .get("properties", {})
                 )
                 if group and kind and v_name and at_provider_props:
-                    result[(f"{group}/{v_name}", kind)] = set(at_provider_props.keys())
+                    result[(f"{group}/{v_name}", kind)] = at_provider_props
         except Exception:  # noqa: BLE001
             continue
     return result

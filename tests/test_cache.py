@@ -51,9 +51,8 @@ class TestLoadCrdBundle:
         assert ("ec2.aws.upbound.io/v1beta1", "VPC") in cache.known_kinds
         assert ("ec2.aws.upbound.io/v1beta1", "VPC") in cache.crd_schemas
         assert ("ec2.aws.upbound.io/v1beta1", "VPC") in cache.atprovider_schemas
-        assert cache.atprovider_schemas[("ec2.aws.upbound.io/v1beta1", "VPC")] == {
-            "id", "arn"
-        }
+        ap = cache.atprovider_schemas[("ec2.aws.upbound.io/v1beta1", "VPC")]
+        assert set(ap.keys()) == {"id", "arn"}
 
     def test_loads_multiple_crds(self, tmp_path):
         for kind_name, group in [("VPC", "ec2.aws.upbound.io"), ("Bucket", "s3.aws.upbound.io")]:

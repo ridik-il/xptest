@@ -85,8 +85,12 @@ def run_with_timing(
             if config.aws_region:
                 kwargs["region_name"] = config.aws_region
             session = boto3.Session(**kwargs)
-            # Verify credentials are available
-            session.client("sts").get_caller_identity()
+            # Verify credentials are available and check type
+            sts = session.client("sts")
+            identity = sts.get_caller_identity()
+            _warn_static_credentials(identity, findings)
+        except DriftError:
+            raise
         except Exception as exc:
             raise DriftError(
                 f"Cannot establish AWS session: {exc}. "
