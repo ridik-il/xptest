@@ -178,6 +178,44 @@ def _evaluate_opa(
     return all_violations
 
 
+def _normalize_opa_value(value: Any) -> list[dict[str, Any]]:
+    """Normalize OPA JSON output into plain violation dictionaries."""
+    normalized: list[dict[str, Any]] = []
+
+    if isinstance(value, list):
+        for item in value:
+            normalized.extend(_normalize_opa_value(item))
+        return normalized
+
+    if isinstance(value, dict):
+        if value and all(
+            isinstance(key, str) and isinstance(enabled, bool)
+            for key, enabled in value.items()
+        ):
+            for key, enabled in value.items():
+                if not enabled:
+                    continue
+                try:
+                    decoded = json.loads(key)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(decoded, dict):
+                    normalized.append(decoded)
+            return normalized
+
+        if not value:
+            return normalized
+
+        normalized.append(value)
+        return normalized
+
+    if isinstance(value, set):
+        for item in value:
+            normalized.extend(_normalize_opa_value(item))
+
+    return normalized
+
+
 def _run_opa_combined_query(
     opa_binary: str,
     input_path: str,
@@ -220,13 +258,7 @@ def _run_opa_combined_query(
     violations: list[dict[str, Any]] = []
     for r in output.get("result", []):
         for expr in r.get("expressions", []):
-            value = expr.get("value")
-            if isinstance(value, list):
-                for pkg_violations in value:
-                    if isinstance(pkg_violations, list):
-                        violations.extend(pkg_violations)
-                    elif isinstance(pkg_violations, dict):
-                        violations.append(pkg_violations)
+            violations.extend(_normalize_opa_value(expr.get("value")))
     return violations
 
 
@@ -287,11 +319,7 @@ def _run_opa_query(
     violations = []
     for r in output.get("result", []):
         for expr in r.get("expressions", []):
-            value = expr.get("value")
-            if isinstance(value, list):
-                violations.extend(value)
-            elif isinstance(value, set):
-                violations.extend(value)
+            violations.extend(_normalize_opa_value(expr.get("value")))
     return violations
 
 
