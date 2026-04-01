@@ -119,11 +119,13 @@ def compute_fixture_metrics(
                 break
 
         if expected_path is None:
-            results.append(FixtureResult(
-                fixture=stem,
-                actual_count=len(actual),
-                details=["No expected.json found"],
-            ))
+            results.append(
+                FixtureResult(
+                    fixture=stem,
+                    actual_count=len(actual),
+                    details=["No expected.json found"],
+                )
+            )
             continue
 
         expected = json.loads(expected_path.read_text())
@@ -200,10 +202,7 @@ def generate_report(
 ) -> dict[str, Any]:
     """Generate the full evaluation report as a dict."""
     return {
-        "summary": {
-            layer: lm.to_dict()
-            for layer, lm in sorted(layer_metrics.items())
-        },
+        "summary": {layer: lm.to_dict() for layer, lm in sorted(layer_metrics.items())},
         "fixtures": [
             {
                 "fixture": fr.fixture,

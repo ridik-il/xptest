@@ -441,22 +441,31 @@ spec:
         """render_mode='offline' with xr_path + functions_path should NOT call subprocess."""
         comp_path, xrd_path = self._write_files(tmp_path)
         xr_path = tmp_path / "xr.yaml"
-        xr_path.write_text(yaml.dump({
-            "apiVersion": "example.org/v1alpha1",
-            "kind": "XTest",
-            "metadata": {"name": "test-xr"},
-            "spec": {"region": "us-east-1"},
-        }))
+        xr_path.write_text(
+            yaml.dump(
+                {
+                    "apiVersion": "example.org/v1alpha1",
+                    "kind": "XTest",
+                    "metadata": {"name": "test-xr"},
+                    "spec": {"region": "us-east-1"},
+                }
+            )
+        )
         fn_path = tmp_path / "functions.yaml"
-        fn_path.write_text(yaml.dump({
-            "apiVersion": "pkg.crossplane.io/v1beta1",
-            "kind": "Function",
-            "metadata": {"name": "function-go-templating"},
-        }))
+        fn_path.write_text(
+            yaml.dump(
+                {
+                    "apiVersion": "pkg.crossplane.io/v1beta1",
+                    "kind": "Function",
+                    "metadata": {"name": "function-go-templating"},
+                }
+            )
+        )
 
         with patch("xptest.render.subprocess.run") as mock_run:
             obj = load(
-                comp_path, xrd_path,
+                comp_path,
+                xrd_path,
                 xr_path=str(xr_path),
                 functions_path=str(fn_path),
                 render_mode="offline",
@@ -493,9 +502,7 @@ spec:
         loader_mod._functions_rewrite_cache.clear()
 
         try:
-            with patch(
-                "xptest.loader.subprocess.run", return_value=mock_result
-            ) as mock_run:
+            with patch("xptest.loader.subprocess.run", return_value=mock_result) as mock_run:
                 # First render — discovery path
                 load(comp_path, xrd_path, render_mode="auto")
                 first_call_count = mock_run.call_count
@@ -661,7 +668,5 @@ class TestDockerIntegration:
         if not comp_path.exists():
             pytest.skip("Reference composition not found")
 
-        rendered = auto_render_pipeline(
-            str(comp_path), str(xrd_path), timeout=60
-        )
+        rendered = auto_render_pipeline(str(comp_path), str(xrd_path), timeout=60)
         assert "Role" in rendered

@@ -128,9 +128,7 @@ def run_with_timing(
 
     t_end = time.monotonic()
     total_duration = t_end - t_start
-    discovery_latency = (
-        (first_finding_time - t_start) if first_finding_time is not None else None
-    )
+    discovery_latency = (first_finding_time - t_start) if first_finding_time is not None else None
     remedy_latency = (
         (last_finding_time - first_finding_time)
         if first_finding_time is not None and last_finding_time is not None
@@ -143,9 +141,7 @@ def run_with_timing(
         discovery_latency_s=(
             round(discovery_latency, 4) if discovery_latency is not None else None
         ),
-        remedy_latency_s=(
-            round(remedy_latency, 4) if remedy_latency is not None else None
-        ),
+        remedy_latency_s=(round(remedy_latency, 4) if remedy_latency is not None else None),
         resources_checked=len(resources),
     )
 

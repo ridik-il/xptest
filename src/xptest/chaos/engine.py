@@ -202,9 +202,7 @@ def apply_perturbation(
         remove_ids = target_ids | related
         mutated.resources = [r for r in mutated.resources if r.resource_id not in remove_ids]
         mutated.edges = [
-            e
-            for e in mutated.edges
-            if e[0] not in remove_ids and e[1] not in remove_ids
+            e for e in mutated.edges if e[0] not in remove_ids and e[1] not in remove_ids
         ]
 
     return mutated
@@ -277,8 +275,7 @@ def analyze_destructive_change(
     if added and removed:
         replacement_severity = Severity.CRITICAL
         replacement_remediation = (
-            "Check conditions and naming to avoid unintended "
-            "replacement transitions."
+            "Check conditions and naming to avoid unintended replacement transitions."
         )
         if perturbation_id == "P3-rename-first-identity":
             # In rename perturbation scenarios, replacement is expected and
@@ -310,8 +307,7 @@ def analyze_destructive_change(
     if len(unexpected_removed) >= 2:
         cascade_severity = Severity.CRITICAL
         cascade_remediation = (
-            "Review dependency boundaries; protect unrelated resources "
-            "from cascade."
+            "Review dependency boundaries; protect unrelated resources from cascade."
         )
         if perturbation_id == "P4-partial-output-truncation":
             cascade_severity = Severity.INFO
@@ -456,8 +452,14 @@ def _looks_data_plane_related(resource_id: str) -> bool:
 def _looks_network_related(fields: tuple[str, str, str, str]) -> bool:
     text = "|".join(fields).lower()
     hints = (
-        "subnet", "securitygroup", "xsecuritygroup", "dbsubnetgroup",
-        "vpc", "routetable", "networkacl", "sg-",
+        "subnet",
+        "securitygroup",
+        "xsecuritygroup",
+        "dbsubnetgroup",
+        "vpc",
+        "routetable",
+        "networkacl",
+        "sg-",
     )
     return any(h in text for h in hints)
 

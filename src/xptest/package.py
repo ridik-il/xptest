@@ -148,23 +148,27 @@ def discover_package(
             comp_name = comp_doc.get("metadata", {}).get("name", Path(comp_path).stem)
             xrd_name = xrd_doc.get("metadata", {}).get("name", Path(xrd_path_str).stem)
 
-            entries.append(PackageEntry(
-                composition_path=comp_path,
-                composition_name=comp_name,
-                xrd_path=xrd_path_str,
-                xrd_name=xrd_name,
-                functions_path=effective_functions,
-                environment_config_paths=environment_config_paths or [],
-            ))
+            entries.append(
+                PackageEntry(
+                    composition_path=comp_path,
+                    composition_name=comp_name,
+                    xrd_path=xrd_path_str,
+                    xrd_name=xrd_name,
+                    functions_path=effective_functions,
+                    environment_config_paths=environment_config_paths or [],
+                )
+            )
         else:
             unmatched_compositions.append(comp_path)
 
     unmatched_xrds = [
-        path for path, doc in xrds
+        path
+        for path, doc in xrds
         if (
             doc.get("spec", {}).get("group", ""),
             doc.get("spec", {}).get("names", {}).get("kind", ""),
-        ) not in matched_xrd_keys
+        )
+        not in matched_xrd_keys
     ]
 
     duration = time.monotonic() - start

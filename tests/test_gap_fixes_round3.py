@@ -63,8 +63,13 @@ class TestRemedyLatency:
         report = DriftReport(
             findings=[
                 DriftFinding(
-                    layer=5, rule="drift/test", resource="r", path="p",
-                    severity=Severity.WARNING, message="m", remediation="r",
+                    layer=5,
+                    rule="drift/test",
+                    resource="r",
+                    path="p",
+                    severity=Severity.WARNING,
+                    message="m",
+                    remediation="r",
                 ),
             ],
             total_duration_s=3.0,
@@ -160,9 +165,7 @@ class TestEvaluateAdditionalMetrics:
 
         config = Config()
         # Use a nonexistent XRD — should gracefully return defaults
-        result = _compute_additional_metrics(
-            tmp_path, "/nonexistent/xrd.yaml", config, {}
-        )
+        result = _compute_additional_metrics(tmp_path, "/nonexistent/xrd.yaml", config, {})
         assert "tway_coverage" in result
         assert "mutation_score" in result
         assert "determinism_score" in result

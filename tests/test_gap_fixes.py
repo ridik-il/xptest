@@ -222,15 +222,15 @@ class TestRouteTableChecker:
         session = MagicMock()
         ec2 = session.client.return_value
         ec2.describe_route_tables.return_value = {
-            "RouteTables": [{
-                "RouteTableId": "rtb-123",
-                "VpcId": "vpc-abc",
-            }]
+            "RouteTables": [
+                {
+                    "RouteTableId": "rtb-123",
+                    "VpcId": "vpc-abc",
+                }
+            ]
         }
 
-        resource = _make_resource("main-rt", "RouteTable", {
-            "forProvider": {"vpcId": "vpc-abc"}
-        })
+        resource = _make_resource("main-rt", "RouteTable", {"forProvider": {"vpcId": "vpc-abc"}})
         findings = check_vpcs(session, [resource])
         assert findings == []
 
@@ -240,15 +240,15 @@ class TestRouteTableChecker:
         session = MagicMock()
         ec2 = session.client.return_value
         ec2.describe_route_tables.return_value = {
-            "RouteTables": [{
-                "RouteTableId": "rtb-123",
-                "VpcId": "vpc-wrong",
-            }]
+            "RouteTables": [
+                {
+                    "RouteTableId": "rtb-123",
+                    "VpcId": "vpc-wrong",
+                }
+            ]
         }
 
-        resource = _make_resource("main-rt", "RouteTable", {
-            "forProvider": {"vpcId": "vpc-abc"}
-        })
+        resource = _make_resource("main-rt", "RouteTable", {"forProvider": {"vpcId": "vpc-abc"}})
         findings = check_vpcs(session, [resource])
         assert len(findings) == 1
         assert findings[0].severity == Severity.CRITICAL
@@ -262,9 +262,7 @@ class TestRouteTableChecker:
         ec2 = session.client.return_value
         ec2.describe_route_tables.return_value = {"RouteTables": []}
 
-        resource = _make_resource("main-rt", "RouteTable", {
-            "forProvider": {"vpcId": "vpc-abc"}
-        })
+        resource = _make_resource("main-rt", "RouteTable", {"forProvider": {"vpcId": "vpc-abc"}})
         findings = check_vpcs(session, [resource])
         assert len(findings) == 1
         assert findings[0].rule == "drift/resource-missing"
@@ -275,9 +273,7 @@ class TestRouteTableChecker:
         session = MagicMock()
         ec2 = session.client.return_value
 
-        resource = _make_resource("main-rt", "RouteTable", {
-            "forProvider": {}
-        })
+        resource = _make_resource("main-rt", "RouteTable", {"forProvider": {}})
         findings = check_vpcs(session, [resource])
         assert findings == []
         ec2.describe_route_tables.assert_not_called()
@@ -302,12 +298,16 @@ class TestS3BucketPolicyChecker:
         policy = json.dumps({"Version": "2012-10-17", "Statement": []})
         s3.get_bucket_policy.return_value = {"Policy": policy}
 
-        resource = _make_resource("data-bucket", "Bucket", {
-            "forProvider": {
-                "bucketName": "test-bucket",
-                "policy": policy,
-            }
-        })
+        resource = _make_resource(
+            "data-bucket",
+            "Bucket",
+            {
+                "forProvider": {
+                    "bucketName": "test-bucket",
+                    "policy": policy,
+                }
+            },
+        )
         findings = check_s3(session, [resource])
         policy_findings = [f for f in findings if f.rule == "drift/s3-bucket-policy"]
         assert policy_findings == []
@@ -326,12 +326,16 @@ class TestS3BucketPolicyChecker:
         observed_policy = json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]})
         s3.get_bucket_policy.return_value = {"Policy": observed_policy}
 
-        resource = _make_resource("data-bucket", "Bucket", {
-            "forProvider": {
-                "bucketName": "test-bucket",
-                "policy": desired_policy,
-            }
-        })
+        resource = _make_resource(
+            "data-bucket",
+            "Bucket",
+            {
+                "forProvider": {
+                    "bucketName": "test-bucket",
+                    "policy": desired_policy,
+                }
+            },
+        )
         findings = check_s3(session, [resource])
         policy_findings = [f for f in findings if f.rule == "drift/s3-bucket-policy"]
         assert len(policy_findings) == 1
@@ -349,12 +353,16 @@ class TestS3BucketPolicyChecker:
         s3.get_bucket_policy.side_effect = error_cls("NoSuchBucketPolicy")
 
         desired_policy = json.dumps({"Version": "2012-10-17", "Statement": []})
-        resource = _make_resource("data-bucket", "Bucket", {
-            "forProvider": {
-                "bucketName": "test-bucket",
-                "policy": desired_policy,
-            }
-        })
+        resource = _make_resource(
+            "data-bucket",
+            "Bucket",
+            {
+                "forProvider": {
+                    "bucketName": "test-bucket",
+                    "policy": desired_policy,
+                }
+            },
+        )
         findings = check_s3(session, [resource])
         policy_findings = [f for f in findings if f.rule == "drift/s3-bucket-policy"]
         assert len(policy_findings) == 1
@@ -372,23 +380,29 @@ class TestDBSubnetGroupChecker:
         session = MagicMock()
         rds = session.client.return_value
         rds.describe_db_subnet_groups.return_value = {
-            "DBSubnetGroups": [{
-                "DBSubnetGroupArn": "arn:rds:subnet-group",
-                "DBSubnetGroupDescription": "test group",
-                "Subnets": [
-                    {"SubnetIdentifier": "subnet-1"},
-                    {"SubnetIdentifier": "subnet-2"},
-                ],
-            }]
+            "DBSubnetGroups": [
+                {
+                    "DBSubnetGroupArn": "arn:rds:subnet-group",
+                    "DBSubnetGroupDescription": "test group",
+                    "Subnets": [
+                        {"SubnetIdentifier": "subnet-1"},
+                        {"SubnetIdentifier": "subnet-2"},
+                    ],
+                }
+            ]
         }
 
-        resource = _make_resource("db-subnet-grp", "DBSubnetGroup", {
-            "forProvider": {
-                "dbSubnetGroupName": "test-group",
-                "description": "test group",
-                "subnetIds": ["subnet-1", "subnet-2"],
-            }
-        })
+        resource = _make_resource(
+            "db-subnet-grp",
+            "DBSubnetGroup",
+            {
+                "forProvider": {
+                    "dbSubnetGroupName": "test-group",
+                    "description": "test group",
+                    "subnetIds": ["subnet-1", "subnet-2"],
+                }
+            },
+        )
         findings = check_rds(session, [resource])
         assert findings == []
 
@@ -398,22 +412,28 @@ class TestDBSubnetGroupChecker:
         session = MagicMock()
         rds = session.client.return_value
         rds.describe_db_subnet_groups.return_value = {
-            "DBSubnetGroups": [{
-                "DBSubnetGroupArn": "arn:rds:subnet-group",
-                "DBSubnetGroupDescription": "test group",
-                "Subnets": [
-                    {"SubnetIdentifier": "subnet-1"},
-                    {"SubnetIdentifier": "subnet-3"},
-                ],
-            }]
+            "DBSubnetGroups": [
+                {
+                    "DBSubnetGroupArn": "arn:rds:subnet-group",
+                    "DBSubnetGroupDescription": "test group",
+                    "Subnets": [
+                        {"SubnetIdentifier": "subnet-1"},
+                        {"SubnetIdentifier": "subnet-3"},
+                    ],
+                }
+            ]
         }
 
-        resource = _make_resource("db-subnet-grp", "DBSubnetGroup", {
-            "forProvider": {
-                "dbSubnetGroupName": "test-group",
-                "subnetIds": ["subnet-1", "subnet-2"],
-            }
-        })
+        resource = _make_resource(
+            "db-subnet-grp",
+            "DBSubnetGroup",
+            {
+                "forProvider": {
+                    "dbSubnetGroupName": "test-group",
+                    "subnetIds": ["subnet-1", "subnet-2"],
+                }
+            },
+        )
         findings = check_rds(session, [resource])
         assert len(findings) == 1
         assert findings[0].severity == Severity.CRITICAL
@@ -427,9 +447,11 @@ class TestDBSubnetGroupChecker:
             "DBSubnetGroupNotFoundFault: not found"
         )
 
-        resource = _make_resource("db-subnet-grp", "DBSubnetGroup", {
-            "forProvider": {"dbSubnetGroupName": "missing-group"}
-        })
+        resource = _make_resource(
+            "db-subnet-grp",
+            "DBSubnetGroup",
+            {"forProvider": {"dbSubnetGroupName": "missing-group"}},
+        )
         findings = check_rds(session, [resource])
         assert len(findings) == 1
         assert findings[0].rule == "drift/resource-missing"
@@ -447,18 +469,24 @@ class TestDBParameterGroupChecker:
         session = MagicMock()
         rds = session.client.return_value
         rds.describe_db_parameter_groups.return_value = {
-            "DBParameterGroups": [{
-                "DBParameterGroupArn": "arn:rds:pg",
-                "DBParameterGroupFamily": "postgres14",
-            }]
+            "DBParameterGroups": [
+                {
+                    "DBParameterGroupArn": "arn:rds:pg",
+                    "DBParameterGroupFamily": "postgres14",
+                }
+            ]
         }
 
-        resource = _make_resource("db-params", "DBParameterGroup", {
-            "forProvider": {
-                "dbParameterGroupName": "test-pg",
-                "family": "postgres14",
-            }
-        })
+        resource = _make_resource(
+            "db-params",
+            "DBParameterGroup",
+            {
+                "forProvider": {
+                    "dbParameterGroupName": "test-pg",
+                    "family": "postgres14",
+                }
+            },
+        )
         findings = check_rds(session, [resource])
         assert findings == []
 
@@ -468,18 +496,24 @@ class TestDBParameterGroupChecker:
         session = MagicMock()
         rds = session.client.return_value
         rds.describe_db_parameter_groups.return_value = {
-            "DBParameterGroups": [{
-                "DBParameterGroupArn": "arn:rds:pg",
-                "DBParameterGroupFamily": "postgres13",
-            }]
+            "DBParameterGroups": [
+                {
+                    "DBParameterGroupArn": "arn:rds:pg",
+                    "DBParameterGroupFamily": "postgres13",
+                }
+            ]
         }
 
-        resource = _make_resource("db-params", "DBParameterGroup", {
-            "forProvider": {
-                "dbParameterGroupName": "test-pg",
-                "family": "postgres14",
-            }
-        })
+        resource = _make_resource(
+            "db-params",
+            "DBParameterGroup",
+            {
+                "forProvider": {
+                    "dbParameterGroupName": "test-pg",
+                    "family": "postgres14",
+                }
+            },
+        )
         findings = check_rds(session, [resource])
         assert len(findings) == 1
         assert findings[0].severity == Severity.CRITICAL
@@ -493,9 +527,9 @@ class TestDBParameterGroupChecker:
             "DBParameterGroupNotFound: not found"
         )
 
-        resource = _make_resource("db-params", "DBParameterGroup", {
-            "forProvider": {"dbParameterGroupName": "missing-pg"}
-        })
+        resource = _make_resource(
+            "db-params", "DBParameterGroup", {"forProvider": {"dbParameterGroupName": "missing-pg"}}
+        )
         findings = check_rds(session, [resource])
         assert len(findings) == 1
         assert findings[0].rule == "drift/resource-missing"
@@ -525,12 +559,16 @@ class TestIamAttachedPoliciesChecker:
             ]
         }
 
-        resource = _make_resource("app-role", "Role", {
-            "forProvider": {
-                "roleName": "app",
-                "managedPolicyArns": ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
-            }
-        })
+        resource = _make_resource(
+            "app-role",
+            "Role",
+            {
+                "forProvider": {
+                    "roleName": "app",
+                    "managedPolicyArns": ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
+                }
+            },
+        )
         findings = check_iam(session, [resource])
         attached = [f for f in findings if f.rule == "drift/iam-attached-policies"]
         assert attached == []
@@ -553,12 +591,16 @@ class TestIamAttachedPoliciesChecker:
             ]
         }
 
-        resource = _make_resource("app-role", "Role", {
-            "forProvider": {
-                "roleName": "app",
-                "managedPolicyArns": ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
-            }
-        })
+        resource = _make_resource(
+            "app-role",
+            "Role",
+            {
+                "forProvider": {
+                    "roleName": "app",
+                    "managedPolicyArns": ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
+                }
+            },
+        )
         findings = check_iam(session, [resource])
         attached = [f for f in findings if f.rule == "drift/iam-attached-policies"]
         assert len(attached) == 1
@@ -583,13 +625,17 @@ class TestIamInlinePolicyChecker:
             "PolicyDocument": policy_doc,
         }
 
-        resource = _make_resource("app-policy", "Policy", {
-            "forProvider": {
-                "name": "app-inline",
-                "roleName": "app-role",
-                "policy": json.dumps(policy_doc),
-            }
-        })
+        resource = _make_resource(
+            "app-policy",
+            "Policy",
+            {
+                "forProvider": {
+                    "name": "app-inline",
+                    "roleName": "app-role",
+                    "policy": json.dumps(policy_doc),
+                }
+            },
+        )
         findings = check_iam(session, [resource])
         inline = [f for f in findings if f.rule == "drift/iam-role-policy"]
         assert inline == []
@@ -605,13 +651,17 @@ class TestIamInlinePolicyChecker:
         observed = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]}
         iam.get_role_policy.return_value = {"PolicyDocument": observed}
 
-        resource = _make_resource("app-policy", "Policy", {
-            "forProvider": {
-                "name": "app-inline",
-                "roleName": "app-role",
-                "policy": json.dumps(desired),
-            }
-        })
+        resource = _make_resource(
+            "app-policy",
+            "Policy",
+            {
+                "forProvider": {
+                    "name": "app-inline",
+                    "roleName": "app-role",
+                    "policy": json.dumps(desired),
+                }
+            },
+        )
         findings = check_iam(session, [resource])
         inline = [f for f in findings if f.rule == "drift/iam-role-policy"]
         assert len(inline) == 1
@@ -625,13 +675,17 @@ class TestIamInlinePolicyChecker:
         iam.exceptions.NoSuchEntityException = type("NoSuchEntityException", (Exception,), {})
         iam.get_role_policy.side_effect = Exception("NoSuchEntity: not found")
 
-        resource = _make_resource("app-policy", "Policy", {
-            "forProvider": {
-                "name": "app-inline",
-                "roleName": "app-role",
-                "policy": '{"Statement": []}',
-            }
-        })
+        resource = _make_resource(
+            "app-policy",
+            "Policy",
+            {
+                "forProvider": {
+                    "name": "app-inline",
+                    "roleName": "app-role",
+                    "policy": '{"Statement": []}',
+                }
+            },
+        )
         findings = check_iam(session, [resource])
         missing = [f for f in findings if f.rule == "drift/resource-missing"]
         assert len(missing) == 1

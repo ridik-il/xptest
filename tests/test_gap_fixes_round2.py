@@ -83,14 +83,22 @@ class TestMutationScore:
 
         findings = [
             Finding(
-                layer=7, rule="fi/resource-disappeared-under-fault",
-                resource="r1", path="", severity=Severity.WARNING,
-                message="", remediation="",
+                layer=7,
+                rule="fi/resource-disappeared-under-fault",
+                resource="r1",
+                path="",
+                severity=Severity.WARNING,
+                message="",
+                remediation="",
             ),
             Finding(
-                layer=7, rule="fi/render-failed-under-fault",
-                resource="r2", path="", severity=Severity.CRITICAL,
-                message="", remediation="",
+                layer=7,
+                rule="fi/render-failed-under-fault",
+                resource="r2",
+                path="",
+                severity=Severity.CRITICAL,
+                message="",
+                remediation="",
             ),
         ]
         result = compute_mutation_score(2, findings)
@@ -102,9 +110,13 @@ class TestMutationScore:
 
         findings = [
             Finding(
-                layer=7, rule="fi/resource-disappeared-under-fault",
-                resource="r1", path="", severity=Severity.WARNING,
-                message="", remediation="",
+                layer=7,
+                rule="fi/resource-disappeared-under-fault",
+                resource="r1",
+                path="",
+                severity=Severity.WARNING,
+                message="",
+                remediation="",
             ),
         ]
         result = compute_mutation_score(4, findings)
@@ -121,9 +133,13 @@ class TestMutationScore:
 
         findings = [
             Finding(
-                layer=1, rule="L1-03/duplicate-resource-name",
-                resource="r1", path="", severity=Severity.CRITICAL,
-                message="", remediation="",
+                layer=1,
+                rule="L1-03/duplicate-resource-name",
+                resource="r1",
+                path="",
+                severity=Severity.CRITICAL,
+                message="",
+                remediation="",
             ),
         ]
         result = compute_mutation_score(2, findings)
@@ -188,9 +204,13 @@ class TestSeverityOverrides:
 
         findings = [
             Finding(
-                layer=1, rule="L1-06/environment-config-missing",
-                resource="", path="", severity=Severity.WARNING,
-                message="", remediation="",
+                layer=1,
+                rule="L1-06/environment-config-missing",
+                resource="",
+                path="",
+                severity=Severity.WARNING,
+                message="",
+                remediation="",
             ),
         ]
         apply_severity_overrides(findings, {"L1-06/environment-config-missing": "CRITICAL"})
@@ -201,9 +221,13 @@ class TestSeverityOverrides:
 
         findings = [
             Finding(
-                layer=2, rule="L2-02/cycle-detected",
-                resource="", path="", severity=Severity.CRITICAL,
-                message="", remediation="",
+                layer=2,
+                rule="L2-02/cycle-detected",
+                resource="",
+                path="",
+                severity=Severity.CRITICAL,
+                message="",
+                remediation="",
             ),
         ]
         apply_severity_overrides(findings, {"L2-02/cycle-detected": "WARNING"})
@@ -214,9 +238,13 @@ class TestSeverityOverrides:
 
         findings = [
             Finding(
-                layer=1, rule="L1-03/duplicate-resource-name",
-                resource="", path="", severity=Severity.CRITICAL,
-                message="", remediation="",
+                layer=1,
+                rule="L1-03/duplicate-resource-name",
+                resource="",
+                path="",
+                severity=Severity.CRITICAL,
+                message="",
+                remediation="",
             ),
         ]
         apply_severity_overrides(findings, {})
@@ -227,9 +255,13 @@ class TestSeverityOverrides:
 
         findings = [
             Finding(
-                layer=1, rule="L1-03/duplicate-resource-name",
-                resource="", path="", severity=Severity.CRITICAL,
-                message="", remediation="",
+                layer=1,
+                rule="L1-03/duplicate-resource-name",
+                resource="",
+                path="",
+                severity=Severity.CRITICAL,
+                message="",
+                remediation="",
             ),
         ]
         apply_severity_overrides(findings, {"some-other-rule": "WARNING"})
@@ -251,9 +283,7 @@ class TestCrossCompositionOrdering:
                 {"name": "database", "depends_on": ["network"], "consumes": ["vpc-id"]},
             ]
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
             yaml.safe_dump(manifest, fh)
             path = fh.name
 
@@ -271,9 +301,7 @@ class TestCrossCompositionOrdering:
                 {"name": "database", "depends_on": ["nonexistent"]},
             ]
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
             yaml.safe_dump(manifest, fh)
             path = fh.name
 
@@ -292,17 +320,13 @@ class TestCrossCompositionOrdering:
                 {"name": "database", "depends_on": ["network"], "consumes": ["missing-output"]},
             ]
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
             yaml.safe_dump(manifest, fh)
             path = fh.name
 
         try:
             findings = check_cross_composition_ordering(path)
-            assert any(
-                f.rule == "L2-05/unresolved-cross-composition-output" for f in findings
-            )
+            assert any(f.rule == "L2-05/unresolved-cross-composition-output" for f in findings)
         finally:
             Path(path).unlink()
 
@@ -315,9 +339,7 @@ class TestCrossCompositionOrdering:
                 {"name": "b", "depends_on": ["a"]},
             ]
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
             yaml.safe_dump(manifest, fh)
             path = fh.name
 
@@ -343,14 +365,16 @@ class TestDeprecatedFields:
     def test_deprecated_sg_ingress(self):
         from xptest.layer1.static import _check_deprecated_fields
 
-        obj = _make_composition_object(resources=[
-            ComposedResource(
-                name="my-sg",
-                api_version="ec2.aws.upbound.io/v1beta1",
-                kind="SecurityGroup",
-                spec={"forProvider": {"ingress": [{"fromPort": 22}]}},
-            ),
-        ])
+        obj = _make_composition_object(
+            resources=[
+                ComposedResource(
+                    name="my-sg",
+                    api_version="ec2.aws.upbound.io/v1beta1",
+                    kind="SecurityGroup",
+                    spec={"forProvider": {"ingress": [{"fromPort": 22}]}},
+                ),
+            ]
+        )
         findings = _check_deprecated_fields(obj)
         assert len(findings) == 1
         assert findings[0].rule == "L1-05/deprecated-field"
@@ -359,14 +383,16 @@ class TestDeprecatedFields:
     def test_deprecated_s3_acl(self):
         from xptest.layer1.static import _check_deprecated_fields
 
-        obj = _make_composition_object(resources=[
-            ComposedResource(
-                name="my-bucket",
-                api_version="s3.aws.upbound.io/v1beta1",
-                kind="Bucket",
-                spec={"forProvider": {"acl": "private"}},
-            ),
-        ])
+        obj = _make_composition_object(
+            resources=[
+                ComposedResource(
+                    name="my-bucket",
+                    api_version="s3.aws.upbound.io/v1beta1",
+                    kind="Bucket",
+                    spec={"forProvider": {"acl": "private"}},
+                ),
+            ]
+        )
         findings = _check_deprecated_fields(obj)
         assert len(findings) == 1
         assert "acl" in findings[0].message
@@ -374,28 +400,32 @@ class TestDeprecatedFields:
     def test_no_deprecated_fields(self):
         from xptest.layer1.static import _check_deprecated_fields
 
-        obj = _make_composition_object(resources=[
-            ComposedResource(
-                name="my-vpc",
-                api_version="ec2.aws.upbound.io/v1beta1",
-                kind="VPC",
-                spec={"forProvider": {"cidrBlock": "10.0.0.0/16"}},
-            ),
-        ])
+        obj = _make_composition_object(
+            resources=[
+                ComposedResource(
+                    name="my-vpc",
+                    api_version="ec2.aws.upbound.io/v1beta1",
+                    kind="VPC",
+                    spec={"forProvider": {"cidrBlock": "10.0.0.0/16"}},
+                ),
+            ]
+        )
         findings = _check_deprecated_fields(obj)
         assert len(findings) == 0
 
     def test_different_provider_no_match(self):
         from xptest.layer1.static import _check_deprecated_fields
 
-        obj = _make_composition_object(resources=[
-            ComposedResource(
-                name="my-sg",
-                api_version="gcp.upbound.io/v1beta1",
-                kind="SecurityGroup",
-                spec={"forProvider": {"ingress": [{"fromPort": 22}]}},
-            ),
-        ])
+        obj = _make_composition_object(
+            resources=[
+                ComposedResource(
+                    name="my-sg",
+                    api_version="gcp.upbound.io/v1beta1",
+                    kind="SecurityGroup",
+                    spec={"forProvider": {"ingress": [{"fromPort": 22}]}},
+                ),
+            ]
+        )
         findings = _check_deprecated_fields(obj)
         assert len(findings) == 0
 
@@ -538,9 +568,13 @@ class TestDriftTiming:
         from xptest.drift.models import DriftFinding
 
         finding = DriftFinding(
-            layer=5, rule="drift/vpc-mismatch", resource="vpc",
-            path="cidrBlock", severity=Severity.CRITICAL,
-            message="", remediation="",
+            layer=5,
+            rule="drift/vpc-mismatch",
+            resource="vpc",
+            path="cidrBlock",
+            severity=Severity.CRITICAL,
+            message="",
+            remediation="",
         )
         report = DriftReport(
             findings=[finding],

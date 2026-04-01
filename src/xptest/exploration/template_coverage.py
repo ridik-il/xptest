@@ -58,10 +58,12 @@ def measure_coverage(
             coverage_pct=100.0,
         )
 
-    payload = json.dumps({
-        "template": template_source,
-        "inputs": inputs,
-    })
+    payload = json.dumps(
+        {
+            "template": template_source,
+            "inputs": inputs,
+        }
+    )
 
     try:
         result = subprocess.run(

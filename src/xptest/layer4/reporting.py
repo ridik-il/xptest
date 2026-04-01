@@ -135,8 +135,7 @@ def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO
         dedup = perturb.get("dedup_skipped", 0)
         if dedup:
             out.write(
-                f"  unique_baselines={perturb.get('unique_baselines', 0)} "
-                f"dedup_skipped={dedup}\n"
+                f"  unique_baselines={perturb.get('unique_baselines', 0)} dedup_skipped={dedup}\n"
             )
         duration = perturb.get("duration_s", 0)
         if duration:

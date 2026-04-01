@@ -466,9 +466,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         from xptest.render import crossplane_cli_available
 
         if not crossplane_cli_available():
-            progress.step(
-                "crossplane CLI not found — falling back to offline mode"
-            )
+            progress.step("crossplane CLI not found — falling back to offline mode")
             render_mode = "offline"
 
     max_inputs = args.max_inputs or cfg.max_exploration_inputs or 100
@@ -502,9 +500,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         if use_explicit_xr:
             xr_path = args.xr
         else:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".yaml", delete=False
-            ) as fh:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
                 yaml.safe_dump(xr_doc, fh, sort_keys=False)
                 xr_path = fh.name
 
@@ -523,27 +519,25 @@ def _cmd_explore(args: argparse.Namespace) -> int:
                 first_obj = obj
 
             case_id = f"explore-{idx}:{label}" if not use_explicit_xr else "explore-0"
-            input_flat = (
-                flatten_input_spec(xr_doc.get("spec", {}), "spec")
-                if xr_doc
-                else {}
-            )
+            input_flat = flatten_input_spec(xr_doc.get("spec", {}), "spec") if xr_doc else {}
             snapshot = build_snapshot(obj, case_id=case_id, input_flat=input_flat)
             snapshots.append(snapshot)
 
         except LoadError as exc:
             progress.warn(f"render error ({label}): {exc}")
-            all_findings.append(Finding(
-                layer=7,
-                rule="explore/render-error",
-                resource="",
-                path="",
-                severity=Severity.CRITICAL,
-                message=f"Render failed for input '{label}': {exc}",
-                remediation="Check composition, XRD, and functions compatibility.",
-                finding_id="explore/render-error",
-                category="exploration",
-            ))
+            all_findings.append(
+                Finding(
+                    layer=7,
+                    rule="explore/render-error",
+                    resource="",
+                    path="",
+                    severity=Severity.CRITICAL,
+                    message=f"Render failed for input '{label}': {exc}",
+                    remediation="Check composition, XRD, and functions compatibility.",
+                    finding_id="explore/render-error",
+                    category="exploration",
+                )
+            )
         finally:
             if not use_explicit_xr:
                 Path(xr_path).unlink(missing_ok=True)
@@ -593,9 +587,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         if not seed_xr and candidates:
             _, first_doc = candidates[0]
             if first_doc:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".yaml", delete=False
-                ) as fh:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
                     yaml.safe_dump(first_doc, fh, sort_keys=False)
                     seed_xr = fh.name
 
@@ -622,11 +614,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     coverage_report = measure_coverage("", [])  # placeholder until Go helper exists
 
     # Phase 6b: Coverage-guided extension (extend_suite)
-    if (
-        not use_explicit_xr
-        and coverage_report.uncovered
-        and first_obj is not None
-    ):
+    if not use_explicit_xr and coverage_report.uncovered and first_obj is not None:
         xrd_doc = _read_xrd(args.xrd)
         xrd_spec_schema = (
             xrd_doc.get("spec", {})
@@ -641,13 +629,10 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         extensions = extend_suite(candidates, uncovered_ids, params)
         if extensions:
             sys.stderr.write(
-                f"xptest explore: extending suite with {len(extensions)} "
-                f"coverage-guided input(s)\n"
+                f"xptest explore: extending suite with {len(extensions)} coverage-guided input(s)\n"
             )
             for idx, (label, xr_doc) in enumerate(extensions):
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".yaml", delete=False
-                ) as fh:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
                     yaml.safe_dump(xr_doc, fh, sort_keys=False)
                     ext_xr_path = fh.name
                 try:
@@ -673,7 +658,10 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     # Phase 7: Compute §3.3.4 metrics
     # t-way coverage
     tway_report: dict[str, Any] = {
-        "t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0,
+        "t": 2,
+        "total_tuples": 0,
+        "covered_tuples": 0,
+        "coverage_pct": 100.0,
     }
     if not use_explicit_xr:
         xrd_doc_m = _read_xrd(args.xrd)
@@ -695,7 +683,9 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     # Determinism score — re-render first few inputs and compare
     progress.phase("Determinism check")
     determinism_report: dict[str, Any] = {
-        "total_inputs": 0, "identical_outputs": 0, "determinism_score": 1.0,
+        "total_inputs": 0,
+        "identical_outputs": 0,
+        "determinism_score": 1.0,
     }
     det_limit = min(5, len(candidates))
     if det_limit > 0 and not use_explicit_xr:
@@ -703,9 +693,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         run_b_snapshots: list = []
         for idx in range(det_limit):
             label, xr_doc = candidates[idx]
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".yaml", delete=False
-            ) as fh:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
                 yaml.safe_dump(xr_doc, fh, sort_keys=False)
                 det_xr_path = fh.name
             try:
@@ -748,9 +736,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
             "breaking_change_count": len(
                 [f for f in all_findings if f.category == "breaking-change"]
             ),
-            "invariant_count": len(
-                [f for f in all_findings if f.category == "invariant"]
-            ),
+            "invariant_count": len([f for f in all_findings if f.category == "invariant"]),
             "fault_injection_count": len(
                 [f for f in all_findings if f.category == "fault-injection"]
             ),
@@ -768,20 +754,22 @@ def _cmd_explore(args: argparse.Namespace) -> int:
 
     # Coverage threshold enforcement
     if cov_threshold > 0 and coverage_report.coverage_pct < cov_threshold:
-        all_findings.append(Finding(
-            layer=7,
-            rule="explore/coverage-below-threshold",
-            resource="",
-            path="",
-            severity=Severity.WARNING,
-            message=(
-                f"Branch coverage {coverage_report.coverage_pct:.1f}% "
-                f"below threshold {cov_threshold:.1f}%."
-            ),
-            remediation="Add input combinations that exercise uncovered template branches.",
-            finding_id="explore/coverage-below-threshold",
-            category="exploration",
-        ))
+        all_findings.append(
+            Finding(
+                layer=7,
+                rule="explore/coverage-below-threshold",
+                resource="",
+                path="",
+                severity=Severity.WARNING,
+                message=(
+                    f"Branch coverage {coverage_report.coverage_pct:.1f}% "
+                    f"below threshold {cov_threshold:.1f}%."
+                ),
+                remediation="Add input combinations that exercise uncovered template branches.",
+                finding_id="explore/coverage-below-threshold",
+                category="exploration",
+            )
+        )
 
     return layer4.write_extended(
         all_findings, output_path=args.output, extra_sections=report_sections
@@ -801,9 +789,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
         from xptest.render import crossplane_cli_available
 
         if not crossplane_cli_available():
-            progress.step(
-                "crossplane CLI not found — falling back to offline mode"
-            )
+            progress.step("crossplane CLI not found — falling back to offline mode")
             args.render_mode = "offline"
 
     progress.phase("Generating XR parameter combinations")
@@ -905,8 +891,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
             Path(xr_path).unlink(missing_ok=True)
 
     progress.done(
-        f"Render+validate: render={timings['render']:.1f}s "
-        f"validate={timings['validate']:.1f}s"
+        f"Render+validate: render={timings['render']:.1f}s validate={timings['validate']:.1f}s"
     )
 
     if not args.logic_test:
@@ -928,7 +913,10 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
 
 def _run_layers(obj, cfg, halt_on_critical: bool, crd_cache=None) -> list:
     result = run_validations(
-        obj, cfg, halt_on_critical=halt_on_critical, crd_cache=crd_cache,
+        obj,
+        cfg,
+        halt_on_critical=halt_on_critical,
+        crd_cache=crd_cache,
     )
     if result.halted_layer in {1, 2}:
         sys.stderr.write(
@@ -1162,8 +1150,7 @@ def _run_logic_phase(
 
         perturbation_stats["total_scenarios"] = total_scenarios
         progress.step(
-            f"Running {total_scenarios} scenarios across "
-            f"{len(dedup_baselines)} baselines"
+            f"Running {total_scenarios} scenarios across {len(dedup_baselines)} baselines"
         )
 
         scenario_counter = 0
@@ -1176,9 +1163,7 @@ def _run_logic_phase(
             scenarios = generate_perturbations(baseline, profile=chaos_profile)
             for sc in scenarios:
                 scenario_counter += 1
-                progress.scenario(
-                    scenario_counter - 1, total_scenarios, sc.perturbation_id
-                )
+                progress.scenario(scenario_counter - 1, total_scenarios, sc.perturbation_id)
                 t0_sc = _time.monotonic()
                 mutated = apply_perturbation(baseline, sc)
                 destructive = analyze_destructive_change(
@@ -1188,9 +1173,7 @@ def _run_logic_phase(
                     scenario=sc,
                 )
                 dt_sc = _time.monotonic() - t0_sc
-                perturbation_findings.extend(
-                    [_destructive_to_finding(d) for d in destructive]
-                )
+                perturbation_findings.extend([_destructive_to_finding(d) for d in destructive])
                 perturbation_trace.append(
                     {
                         "baseline": baseline.case_id,
@@ -1205,8 +1188,7 @@ def _run_logic_phase(
 
         t_perturb = _time.monotonic() - t0_perturb
         progress.done(
-            f"Perturbation: {total_scenarios} scenarios, "
-            f"{len(perturbation_findings)} findings"
+            f"Perturbation: {total_scenarios} scenarios, {len(perturbation_findings)} findings"
         )
         perturbation_stats["duration_s"] = round(t_perturb, 2)
 
@@ -1448,9 +1430,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         from xptest.render import crossplane_cli_available
 
         if not crossplane_cli_available():
-            progress.step(
-                "crossplane CLI not found — falling back to offline mode"
-            )
+            progress.step("crossplane CLI not found — falling back to offline mode")
             args.render_mode = "offline"
 
     # Discover compositions and XRDs
@@ -1462,29 +1442,16 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     )
 
     if not result.entries:
-        progress.warn(
-            f"no Composition+XRD pairs found under '{args.root}'"
-        )
+        progress.warn(f"no Composition+XRD pairs found under '{args.root}'")
         if result.unmatched_compositions:
-            progress.step(
-                f"Unmatched compositions: "
-                f"{len(result.unmatched_compositions)}"
-            )
+            progress.step(f"Unmatched compositions: {len(result.unmatched_compositions)}")
         if result.unmatched_xrds:
-            progress.step(
-                f"Unmatched XRDs: {len(result.unmatched_xrds)}"
-            )
+            progress.step(f"Unmatched XRDs: {len(result.unmatched_xrds)}")
         return 1
 
-    progress.step(
-        f"{len(result.entries)} composition(s) found "
-        f"in {result.scan_duration_s:.2f}s"
-    )
+    progress.step(f"{len(result.entries)} composition(s) found in {result.scan_duration_s:.2f}s")
     if result.unmatched_compositions:
-        progress.step(
-            f"{len(result.unmatched_compositions)} unmatched "
-            f"composition(s) skipped"
-        )
+        progress.step(f"{len(result.unmatched_compositions)} unmatched composition(s) skipped")
 
     # Load CRD bundle once for all compositions
     crd_cache = load_crd_bundle(cfg.crd_bundle_path)
@@ -1560,12 +1527,8 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         composition_reports.append(comp_report)
         total_findings += len(finding_dicts)
 
-        critical_count = sum(
-            1 for f in vr.findings if f.severity == Severity.CRITICAL
-        )
-        warning_count = sum(
-            1 for f in vr.findings if f.severity == Severity.WARNING
-        )
+        critical_count = sum(1 for f in vr.findings if f.severity == Severity.CRITICAL)
+        warning_count = sum(1 for f in vr.findings if f.severity == Severity.WARNING)
         if critical_count:
             has_critical = True
             fail_count += 1
@@ -1592,9 +1555,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         "compositions": composition_reports,
     }
 
-    Path(args.output).write_text(
-        json.dumps(report, indent=2) + "\n"
-    )
+    Path(args.output).write_text(json.dumps(report, indent=2) + "\n")
 
     progress.phase("Scan complete")
     progress.step(f"Compositions: {len(result.entries)}")

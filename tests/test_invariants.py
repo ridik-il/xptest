@@ -64,9 +64,7 @@ def test_type_coverage_missing_gvk():
 def test_deletion_policy_escalation_detected():
     baseline_policies = {"bucket": "Orphan"}
     node = _node("bucket", spec={"deletionPolicy": "Delete"})
-    findings = check_deletion_policy_escalation(
-        baseline_policies, [_snapshot("c1", [node])]
-    )
+    findings = check_deletion_policy_escalation(baseline_policies, [_snapshot("c1", [node])])
     assert len(findings) == 1
     assert findings[0].rule == "inv/deletion-policy-escalation"
 
@@ -74,9 +72,7 @@ def test_deletion_policy_escalation_detected():
 def test_deletion_policy_no_escalation():
     baseline_policies = {"bucket": "Delete"}
     node = _node("bucket", spec={"deletionPolicy": "Delete"})
-    findings = check_deletion_policy_escalation(
-        baseline_policies, [_snapshot("c1", [node])]
-    )
+    findings = check_deletion_policy_escalation(baseline_policies, [_snapshot("c1", [node])])
     assert findings == []
 
 
@@ -116,10 +112,13 @@ def test_collect_declared_gvks():
 
 
 def test_collect_baseline_deletion_policies():
-    s = _snapshot("c1", [
-        _node("a", spec={"deletionPolicy": "Orphan"}),
-        _node("b", spec={"deletionPolicy": "Delete"}),
-    ])
+    s = _snapshot(
+        "c1",
+        [
+            _node("a", spec={"deletionPolicy": "Orphan"}),
+            _node("b", spec={"deletionPolicy": "Delete"}),
+        ],
+    )
     policies = collect_baseline_deletion_policies([s])
     assert policies["a"] == "Orphan"
     assert policies["b"] == "Delete"

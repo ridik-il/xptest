@@ -151,23 +151,29 @@ class TestRdsChecker:
         session = MagicMock()
         rds = session.client.return_value
         rds.describe_db_instances.return_value = {
-            "DBInstances": [{
-                "Engine": "postgres",
-                "DBInstanceClass": "db.t3.micro",
-                "StorageEncrypted": True,
-                "PubliclyAccessible": False,
-                "DBInstanceArn": "arn:aws:rds:eu-west-1:123:db:test",
-            }]
+            "DBInstances": [
+                {
+                    "Engine": "postgres",
+                    "DBInstanceClass": "db.t3.micro",
+                    "StorageEncrypted": True,
+                    "PubliclyAccessible": False,
+                    "DBInstanceArn": "arn:aws:rds:eu-west-1:123:db:test",
+                }
+            ]
         }
 
-        resource = _make_resource("main-db", "DBInstance", {
-            "forProvider": {
-                "engine": "postgres",
-                "dbInstanceClass": "db.t3.micro",
-                "storageEncrypted": True,
-                "publiclyAccessible": False,
-            }
-        })
+        resource = _make_resource(
+            "main-db",
+            "DBInstance",
+            {
+                "forProvider": {
+                    "engine": "postgres",
+                    "dbInstanceClass": "db.t3.micro",
+                    "storageEncrypted": True,
+                    "publiclyAccessible": False,
+                }
+            },
+        )
         findings = check_rds(session, [resource])
         assert findings == []
 
@@ -177,22 +183,28 @@ class TestRdsChecker:
         session = MagicMock()
         rds = session.client.return_value
         rds.describe_db_instances.return_value = {
-            "DBInstances": [{
-                "Engine": "postgres",
-                "DBInstanceClass": "db.t3.micro",
-                "StorageEncrypted": True,
-                "PubliclyAccessible": True,
-                "DBInstanceArn": "arn:aws:rds:eu-west-1:123:db:test",
-            }]
+            "DBInstances": [
+                {
+                    "Engine": "postgres",
+                    "DBInstanceClass": "db.t3.micro",
+                    "StorageEncrypted": True,
+                    "PubliclyAccessible": True,
+                    "DBInstanceArn": "arn:aws:rds:eu-west-1:123:db:test",
+                }
+            ]
         }
 
-        resource = _make_resource("main-db", "DBInstance", {
-            "forProvider": {
-                "engine": "postgres",
-                "dbInstanceClass": "db.t3.micro",
-                "publiclyAccessible": False,
-            }
-        })
+        resource = _make_resource(
+            "main-db",
+            "DBInstance",
+            {
+                "forProvider": {
+                    "engine": "postgres",
+                    "dbInstanceClass": "db.t3.micro",
+                    "publiclyAccessible": False,
+                }
+            },
+        )
         findings = check_rds(session, [resource])
         assert len(findings) == 1
         assert findings[0].severity == Severity.CRITICAL
@@ -209,9 +221,7 @@ class TestIamChecker:
         iam.exceptions.NoSuchEntityException = type("NoSuchEntityException", (Exception,), {})
         iam.get_role.side_effect = iam.exceptions.NoSuchEntityException("not found")
 
-        resource = _make_resource("app-role", "Role", {
-            "forProvider": {"roleName": "app-role"}
-        })
+        resource = _make_resource("app-role", "Role", {"forProvider": {"roleName": "app-role"}})
         findings = check_iam(session, [resource])
         assert len(findings) == 1
         assert findings[0].rule == "drift/resource-missing"
@@ -237,15 +247,19 @@ class TestIamChecker:
             }
         }
 
-        resource = _make_resource("app-role", "Role", {
-            "forProvider": {
-                "roleName": "app-role",
-                "assumeRolePolicyDocument": (
-                    '{"Version":"2012-10-17","Statement":'
-                    '[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"}}]}'
-                ),
-            }
-        })
+        resource = _make_resource(
+            "app-role",
+            "Role",
+            {
+                "forProvider": {
+                    "roleName": "app-role",
+                    "assumeRolePolicyDocument": (
+                        '{"Version":"2012-10-17","Statement":'
+                        '[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"}}]}'
+                    ),
+                }
+            },
+        )
         findings = check_iam(session, [resource])
         assert len(findings) == 1
         assert findings[0].rule == "drift/iam-trust-policy"
@@ -265,12 +279,16 @@ class TestS3Checker:
         )
         s3.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {}}
 
-        resource = _make_resource("data-bucket", "Bucket", {
-            "forProvider": {
-                "bucketName": "test-bucket",
-                "serverSideEncryptionConfiguration": {"rules": []},
-            }
-        })
+        resource = _make_resource(
+            "data-bucket",
+            "Bucket",
+            {
+                "forProvider": {
+                    "bucketName": "test-bucket",
+                    "serverSideEncryptionConfiguration": {"rules": []},
+                }
+            },
+        )
         findings = check_s3(session, [resource])
         enc_findings = [f for f in findings if f.rule == "drift/s3-encryption"]
         assert len(enc_findings) == 1

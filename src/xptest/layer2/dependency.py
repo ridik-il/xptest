@@ -446,15 +446,17 @@ def check_cross_composition_ordering(
         with p.open() as fh:
             doc = yaml.safe_load(fh)
     except Exception:  # noqa: BLE001
-        return [Finding(
-            layer=2,
-            rule="L2-05/manifest-parse-error",
-            resource="",
-            path=manifest_path,
-            severity=Severity.CRITICAL,
-            message=f"Failed to parse dependency manifest at '{manifest_path}'.",
-            remediation="Ensure the manifest is valid YAML.",
-        )]
+        return [
+            Finding(
+                layer=2,
+                rule="L2-05/manifest-parse-error",
+                resource="",
+                path=manifest_path,
+                severity=Severity.CRITICAL,
+                message=f"Failed to parse dependency manifest at '{manifest_path}'.",
+                remediation="Ensure the manifest is valid YAML.",
+            )
+        ]
 
     if not isinstance(doc, dict):
         return []
@@ -482,18 +484,20 @@ def check_cross_composition_ordering(
 
         for dep in depends_on:
             if dep not in known_names:
-                findings.append(Finding(
-                    layer=2,
-                    rule="L2-05/unknown-composition-dependency",
-                    resource=comp_name,
-                    path=f"depends_on[{dep}]",
-                    severity=Severity.CRITICAL,
-                    message=(
-                        f"Composition '{comp_name}' depends on '{dep}' "
-                        "which is not declared in the dependency manifest."
-                    ),
-                    remediation="Add the missing composition to the manifest.",
-                ))
+                findings.append(
+                    Finding(
+                        layer=2,
+                        rule="L2-05/unknown-composition-dependency",
+                        resource=comp_name,
+                        path=f"depends_on[{dep}]",
+                        severity=Severity.CRITICAL,
+                        message=(
+                            f"Composition '{comp_name}' depends on '{dep}' "
+                            "which is not declared in the dependency manifest."
+                        ),
+                        remediation="Add the missing composition to the manifest.",
+                    )
+                )
             else:
                 graph.setdefault(comp_name, set()).add(dep)
 
@@ -505,21 +509,23 @@ def check_cross_composition_ordering(
                     provided_by_deps = True
                     break
             if not provided_by_deps:
-                findings.append(Finding(
-                    layer=2,
-                    rule="L2-05/unresolved-cross-composition-output",
-                    resource=comp_name,
-                    path=f"consumes[{consumed}]",
-                    severity=Severity.WARNING,
-                    message=(
-                        f"Composition '{comp_name}' consumes output '{consumed}' "
-                        "but no declared dependency provides it."
-                    ),
-                    remediation=(
-                        "Add the providing composition to depends_on "
-                        "or add the output to the provider's provides list."
-                    ),
-                ))
+                findings.append(
+                    Finding(
+                        layer=2,
+                        rule="L2-05/unresolved-cross-composition-output",
+                        resource=comp_name,
+                        path=f"consumes[{consumed}]",
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Composition '{comp_name}' consumes output '{consumed}' "
+                            "but no declared dependency provides it."
+                        ),
+                        remediation=(
+                            "Add the providing composition to depends_on "
+                            "or add the output to the provider's provides list."
+                        ),
+                    )
+                )
 
     # Cycle detection
     try:
@@ -527,14 +533,16 @@ def check_cross_composition_ordering(
         list(sorter.static_order())
     except graphlib.CycleError as exc:
         cycle_info = str(exc)
-        findings.append(Finding(
-            layer=2,
-            rule="L2-05/cross-composition-cycle",
-            resource="",
-            path="compositions",
-            severity=Severity.CRITICAL,
-            message=f"Cycle detected in cross-composition dependencies: {cycle_info}",
-            remediation="Break the dependency cycle between compositions.",
-        ))
+        findings.append(
+            Finding(
+                layer=2,
+                rule="L2-05/cross-composition-cycle",
+                resource="",
+                path="compositions",
+                severity=Severity.CRITICAL,
+                message=f"Cycle detected in cross-composition dependencies: {cycle_info}",
+                remediation="Break the dependency cycle between compositions.",
+            )
+        )
 
     return findings

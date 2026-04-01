@@ -65,9 +65,7 @@ class TestLoadCrdBundle:
                         {
                             "name": "v1beta1",
                             "schema": {
-                                "openAPIV3Schema": {
-                                    "properties": {"spec": {"type": "object"}}
-                                }
+                                "openAPIV3Schema": {"properties": {"spec": {"type": "object"}}}
                             },
                         }
                     ],
@@ -94,11 +92,7 @@ class TestLoadCrdBundle:
                 "versions": [
                     {
                         "name": "v1beta1",
-                        "schema": {
-                            "openAPIV3Schema": {
-                                "properties": {"spec": {"type": "object"}}
-                            }
-                        },
+                        "schema": {"openAPIV3Schema": {"properties": {"spec": {"type": "object"}}}},
                     }
                 ],
             },

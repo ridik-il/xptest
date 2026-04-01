@@ -31,9 +31,7 @@ def _collect_fixtures(*subdirs: str):
         if not d.is_dir():
             continue
         for yaml_file in sorted(d.glob("*.yaml")):
-            expected_file = yaml_file.with_name(
-                yaml_file.stem + "-expected.json"
-            )
+            expected_file = yaml_file.with_name(yaml_file.stem + "-expected.json")
             if expected_file.exists():
                 yield pytest.param(
                     yaml_file,
@@ -84,8 +82,7 @@ def test_dep_error_fixtures(fixture_yaml, expected_json):
     # Recall: every expected rule must be present
     for exp in expected:
         assert exp["rule"] in found_rules, (
-            f"Expected rule '{exp['rule']}' not found. "
-            f"Got: {found_rules}"
+            f"Expected rule '{exp['rule']}' not found. Got: {found_rules}"
         )
 
     # Check severity matches

@@ -24,14 +24,12 @@ def find_snapshot_heuristics(snapshot: RenderedGraphSnapshot) -> list[DiffFindin
                     resource_id=role,
                     evidence={
                         "message": (
-                            f"Duplicate semantic role '{role}' detected "
-                            f"({count} resources)."
+                            f"Duplicate semantic role '{role}' detected ({count} resources)."
                         ),
                         "count": count,
                     },
                     remediation=(
-                        "Ensure composition-resource-name annotations remain "
-                        "unique per role."
+                        "Ensure composition-resource-name annotations remain unique per role."
                     ),
                 )
             )
@@ -52,8 +50,7 @@ def find_snapshot_heuristics(snapshot: RenderedGraphSnapshot) -> list[DiffFindin
                         "count": count,
                     },
                     remediation=(
-                        "Stabilize naming and annotation identity for rendered "
-                        "resources."
+                        "Stabilize naming and annotation identity for rendered resources."
                     ),
                 )
             )

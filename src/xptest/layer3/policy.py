@@ -106,8 +106,7 @@ def _check_opa_version(config: Config) -> Finding | None:
             "different results than expected."
         ),
         remediation=(
-            f"Install OPA version {expected} or update "
-            "opa_expected_version in xptest.yaml."
+            f"Install OPA version {expected} or update opa_expected_version in xptest.yaml."
         ),
     )
 
@@ -125,12 +124,14 @@ def _build_input(obj: CompositionObject, config: Config) -> dict[str, Any]:
     """
     resources = []
     for r in obj.resources:
-        resources.append({
-            "name": r.name,
-            "apiVersion": r.api_version,
-            "kind": r.kind,
-            "spec": r.spec,
-        })
+        resources.append(
+            {
+                "name": r.name,
+                "apiVersion": r.api_version,
+                "kind": r.kind,
+                "spec": r.spec,
+            }
+        )
 
     return {
         "resources": resources,
@@ -152,9 +153,7 @@ def _evaluate_opa(
     """
     all_violations: list[dict[str, Any]] = []
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False
-    ) as input_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as input_file:
         json.dump(opa_input, input_file)
         input_path = input_file.name
 
@@ -171,9 +170,7 @@ def _evaluate_opa(
             # Fallback: individual queries (backwards compatible)
             for package in _RULE_PACKAGES:
                 query = f"data.{package}.violations"
-                violations = _run_opa_query(
-                    config.opa_binary, input_path, str(rules_dir), query
-                )
+                violations = _run_opa_query(config.opa_binary, input_path, str(rules_dir), query)
                 all_violations.extend(violations)
     finally:
         Path(input_path).unlink(missing_ok=True)
@@ -191,9 +188,12 @@ def _run_opa_combined_query(
     cmd = [
         opa_binary,
         "eval",
-        "--data", data_dir,
-        "--input", input_path,
-        "--format", "json",
+        "--data",
+        data_dir,
+        "--input",
+        input_path,
+        "--format",
+        "json",
         query,
     ]
 
@@ -240,9 +240,12 @@ def _run_opa_query(
     cmd = [
         opa_binary,
         "eval",
-        "--data", data_dir,
-        "--input", input_path,
-        "--format", "json",
+        "--data",
+        data_dir,
+        "--input",
+        input_path,
+        "--format",
+        "json",
         query,
     ]
 
@@ -256,8 +259,7 @@ def _run_opa_query(
         )
     except FileNotFoundError:
         raise OpaError(
-            f"OPA binary '{opa_binary}' not found. "
-            "Install OPA or set opa_binary in xptest.yaml."
+            f"OPA binary '{opa_binary}' not found. Install OPA or set opa_binary in xptest.yaml."
         ) from None
     except subprocess.TimeoutExpired:
         raise OpaError(f"OPA evaluation timed out for query: {query}") from None
@@ -269,14 +271,12 @@ def _run_opa_query(
         # Filter out warning lines (version notices, deprecation) from real errors
         stderr_lines = result.stderr.strip().splitlines()
         error_lines = [
-            ln for ln in stderr_lines
-            if not ln.lower().startswith("warning:")
-            and "deprecated" not in ln.lower()
+            ln
+            for ln in stderr_lines
+            if not ln.lower().startswith("warning:") and "deprecated" not in ln.lower()
         ]
         error_msg = "\n".join(error_lines).strip() or result.stderr.strip()
-        raise OpaError(
-            f"OPA evaluation failed (exit {result.returncode}): {error_msg}"
-        )
+        raise OpaError(f"OPA evaluation failed (exit {result.returncode}): {error_msg}")
 
     try:
         output = json.loads(result.stdout)
@@ -304,9 +304,7 @@ def _violations_to_findings(
     for v in violations:
         rule_id = v.get("rule", "unknown")
         # Apply severity override from config, or use the Rego-specified severity
-        raw_severity = config.severity_overrides.get(
-            rule_id, v.get("severity", "CRITICAL")
-        )
+        raw_severity = config.severity_overrides.get(rule_id, v.get("severity", "CRITICAL"))
         severity = _parse_severity(raw_severity)
 
         findings.append(

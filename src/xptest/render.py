@@ -44,23 +44,15 @@ class RenderUnavailable(RuntimeError):
 # These are used when no functions.yaml is provided — we infer images from
 # the composition's pipeline step functionRef names.
 _WELL_KNOWN_FUNCTIONS: dict[str, str] = {
-    "function-go-templating": (
-        "xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.7.0"
-    ),
-    "function-auto-ready": (
-        "xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.3.0"
-    ),
+    "function-go-templating": ("xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.7.0"),
+    "function-auto-ready": ("xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.3.0"),
     "function-environment-configs": (
-        "xpkg.upbound.io/crossplane-contrib/"
-        "function-environment-configs:v0.1.0"
+        "xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.1.0"
     ),
     "function-patch-and-transform": (
-        "xpkg.upbound.io/crossplane-contrib/"
-        "function-patch-and-transform:v0.8.0"
+        "xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.8.0"
     ),
-    "function-kcl": (
-        "xpkg.upbound.io/crossplane-contrib/function-kcl:v0.9.0"
-    ),
+    "function-kcl": ("xpkg.upbound.io/crossplane-contrib/function-kcl:v0.9.0"),
 }
 
 
@@ -223,12 +215,14 @@ def generate_functions_yaml(
             f"xpkg.upbound.io/unknown/{func_name}:latest",
         )
 
-        functions.append({
-            "apiVersion": "pkg.crossplane.io/v1beta1",
-            "kind": "Function",
-            "metadata": {"name": func_name},
-            "spec": {"package": package},
-        })
+        functions.append(
+            {
+                "apiVersion": "pkg.crossplane.io/v1beta1",
+                "kind": "Function",
+                "metadata": {"name": func_name},
+                "spec": {"package": package},
+            }
+        )
 
     return functions
 
@@ -273,12 +267,8 @@ def render_composition(
         RenderError: If rendering fails with an error.
     """
     # Write temporary files for XR and functions
-    xr_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix="-xr.yaml", delete=False
-    )
-    functions_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix="-functions.yaml", delete=False
-    )
+    xr_file = tempfile.NamedTemporaryFile(mode="w", suffix="-xr.yaml", delete=False)
+    functions_file = tempfile.NamedTemporaryFile(mode="w", suffix="-functions.yaml", delete=False)
 
     try:
         xr_file.write(xr_yaml)
@@ -312,13 +302,9 @@ def render_composition(
                     check=False,
                 )
             except FileNotFoundError:
-                raise RenderUnavailable(
-                    "crossplane CLI not found on PATH"
-                ) from None
+                raise RenderUnavailable("crossplane CLI not found on PATH") from None
             except subprocess.TimeoutExpired:
-                raise RenderError(
-                    f"crossplane render timed out after {timeout}s"
-                ) from None
+                raise RenderError(f"crossplane render timed out after {timeout}s") from None
 
             if result.returncode == 0:
                 return result.stdout
@@ -342,9 +328,7 @@ def render_composition(
                 stdout=result.stdout.strip(),
             )
 
-        raise RenderUnavailable(
-            f"crossplane render command not available: {last_error}"
-        )
+        raise RenderUnavailable(f"crossplane render command not available: {last_error}")
 
     finally:
         Path(xr_file.name).unlink(missing_ok=True)
@@ -379,12 +363,8 @@ def auto_render_pipeline(
     else:
         func_docs = generate_functions_yaml(comp_doc)
         if not func_docs:
-            raise RenderError(
-                "No pipeline steps found in composition"
-            )
-        functions_yaml = yaml.dump_all(
-            func_docs, default_flow_style=False
-        )
+            raise RenderError("No pipeline steps found in composition")
+        functions_yaml = yaml.dump_all(func_docs, default_flow_style=False)
 
     return render_composition(
         composition_path=composition_path,

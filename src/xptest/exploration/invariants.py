@@ -24,23 +24,25 @@ def check_type_coverage(
 
     findings: list[Finding] = []
     for api_version, kind in sorted(declared_gvks - rendered_gvks):
-        findings.append(Finding(
-            layer=7,
-            rule="inv/type-coverage",
-            resource=f"{api_version}/{kind}",
-            path="",
-            severity=Severity.CRITICAL,
-            message=(
-                f"Resource type {api_version}/{kind} declared in composition "
-                f"but absent from all {len(snapshots)} render outputs."
-            ),
-            remediation=(
-                "Verify template conditions; ensure every declared resource type "
-                "is reachable by at least one parameter combination."
-            ),
-            finding_id="inv/type-coverage",
-            category="invariant",
-        ))
+        findings.append(
+            Finding(
+                layer=7,
+                rule="inv/type-coverage",
+                resource=f"{api_version}/{kind}",
+                path="",
+                severity=Severity.CRITICAL,
+                message=(
+                    f"Resource type {api_version}/{kind} declared in composition "
+                    f"but absent from all {len(snapshots)} render outputs."
+                ),
+                remediation=(
+                    "Verify template conditions; ensure every declared resource type "
+                    "is reachable by at least one parameter combination."
+                ),
+                finding_id="inv/type-coverage",
+                category="invariant",
+            )
+        )
     return findings
 
 
@@ -55,24 +57,26 @@ def check_deletion_policy_escalation(
             baseline_dp = baseline_policies.get(node.name, "")
             current_dp = node.spec.get("deletionPolicy", "Delete")
             if baseline_dp == "Orphan" and current_dp == "Delete":
-                findings.append(Finding(
-                    layer=7,
-                    rule="inv/deletion-policy-escalation",
-                    resource=node.name,
-                    path="spec.deletionPolicy",
-                    severity=Severity.CRITICAL,
-                    message=(
-                        f"Resource '{node.name}' deletionPolicy changed from "
-                        f"Orphan to Delete in case '{s.case_id}'."
-                    ),
-                    remediation=(
-                        "Confirm deletion policy change is safe. "
-                        "Update baseline if intentional."
-                    ),
-                    finding_id="inv/deletion-policy-escalation",
-                    category="invariant",
-                    case_id=s.case_id,
-                ))
+                findings.append(
+                    Finding(
+                        layer=7,
+                        rule="inv/deletion-policy-escalation",
+                        resource=node.name,
+                        path="spec.deletionPolicy",
+                        severity=Severity.CRITICAL,
+                        message=(
+                            f"Resource '{node.name}' deletionPolicy changed from "
+                            f"Orphan to Delete in case '{s.case_id}'."
+                        ),
+                        remediation=(
+                            "Confirm deletion policy change is safe. "
+                            "Update baseline if intentional."
+                        ),
+                        finding_id="inv/deletion-policy-escalation",
+                        category="invariant",
+                        case_id=s.case_id,
+                    )
+                )
     return findings
 
 
@@ -90,24 +94,26 @@ def check_minimum_resource_count(
 
         count = len(s.resources)
         if count < baseline_min_count:
-            findings.append(Finding(
-                layer=7,
-                rule="inv/minimum-resource-count",
-                resource="",
-                path="",
-                severity=Severity.WARNING,
-                message=(
-                    f"Case '{s.case_id}' rendered {count} resources, "
-                    f"below baseline minimum of {baseline_min_count}."
-                ),
-                remediation=(
-                    "Review parameter combination; this input causes resource-set "
-                    "contraction that may indicate a template bug."
-                ),
-                finding_id="inv/minimum-resource-count",
-                category="invariant",
-                case_id=s.case_id,
-            ))
+            findings.append(
+                Finding(
+                    layer=7,
+                    rule="inv/minimum-resource-count",
+                    resource="",
+                    path="",
+                    severity=Severity.WARNING,
+                    message=(
+                        f"Case '{s.case_id}' rendered {count} resources, "
+                        f"below baseline minimum of {baseline_min_count}."
+                    ),
+                    remediation=(
+                        "Review parameter combination; this input causes resource-set "
+                        "contraction that may indicate a template bug."
+                    ),
+                    finding_id="inv/minimum-resource-count",
+                    category="invariant",
+                    case_id=s.case_id,
+                )
+            )
     return findings
 
 
@@ -138,9 +144,5 @@ def compute_baseline_min_count(
     snapshots: list[RenderedGraphSnapshot],
 ) -> int:
     """Compute minimum resource count across non-fault snapshots."""
-    counts = [
-        len(s.resources)
-        for s in snapshots
-        if "|" not in s.case_id and s.resources
-    ]
+    counts = [len(s.resources) for s in snapshots if "|" not in s.case_id and s.resources]
     return min(counts) if counts else 0

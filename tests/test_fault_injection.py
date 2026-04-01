@@ -47,11 +47,13 @@ def test_sweep_order_leaves_first():
     subnet = _resource(
         "subnet",
         kind="Subnet",
-        patches=[{
-            "type": "FromCompositeFieldPath",
-            "fromFieldPath": "status.atProvider.vpc.vpcId",
-            "toFieldPath": "spec.forProvider.vpcId",
-        }],
+        patches=[
+            {
+                "type": "FromCompositeFieldPath",
+                "fromFieldPath": "status.atProvider.vpc.vpcId",
+                "toFieldPath": "spec.forProvider.vpcId",
+            }
+        ],
     )
     obj = _obj([vpc, subnet])
     order = build_fault_sweep_order(obj)

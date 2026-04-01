@@ -42,9 +42,7 @@ def _write_xrd(spec_properties: dict, required: list[str] | None = None) -> str:
             ],
         },
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as fh:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as fh:
         yaml.safe_dump(xrd, fh, sort_keys=False)
         return fh.name
 

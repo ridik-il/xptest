@@ -63,12 +63,8 @@ def _write_xrd(path, name, group, kind):
 
 class TestDiscoverPackage:
     def test_discovers_matched_pair(self, tmp_path):
-        _write_composition(
-            tmp_path / "composition.yaml", "my-comp", "example.org", "XNetwork"
-        )
-        _write_xrd(
-            tmp_path / "xrd.yaml", "xnetworks.example.org", "example.org", "XNetwork"
-        )
+        _write_composition(tmp_path / "composition.yaml", "my-comp", "example.org", "XNetwork")
+        _write_xrd(tmp_path / "xrd.yaml", "xnetworks.example.org", "example.org", "XNetwork")
 
         result = discover_package(str(tmp_path))
         assert len(result.entries) == 1
@@ -91,18 +87,14 @@ class TestDiscoverPackage:
         assert len(result.entries) == 2
 
     def test_reports_unmatched_composition(self, tmp_path):
-        _write_composition(
-            tmp_path / "composition.yaml", "orphan", "missing.org", "XMissing"
-        )
+        _write_composition(tmp_path / "composition.yaml", "orphan", "missing.org", "XMissing")
 
         result = discover_package(str(tmp_path))
         assert len(result.entries) == 0
         assert len(result.unmatched_compositions) == 1
 
     def test_reports_unmatched_xrd(self, tmp_path):
-        _write_xrd(
-            tmp_path / "xrd.yaml", "xorphans.example.org", "example.org", "XOrphan"
-        )
+        _write_xrd(tmp_path / "xrd.yaml", "xorphans.example.org", "example.org", "XOrphan")
 
         result = discover_package(str(tmp_path))
         assert len(result.entries) == 0
@@ -118,20 +110,14 @@ class TestDiscoverPackage:
         _write_composition(
             nested / "composition.yaml", "nested-comp", "net.example.org", "XNetwork"
         )
-        _write_xrd(
-            nested / "xrd.yaml", "xnetworks.net.example.org", "net.example.org", "XNetwork"
-        )
+        _write_xrd(nested / "xrd.yaml", "xnetworks.net.example.org", "net.example.org", "XNetwork")
 
         result = discover_package(str(tmp_path))
         assert len(result.entries) == 1
 
     def test_functions_yaml_auto_discovery(self, tmp_path):
-        _write_composition(
-            tmp_path / "composition.yaml", "comp", "example.org", "XTest"
-        )
-        _write_xrd(
-            tmp_path / "xrd.yaml", "xtests.example.org", "example.org", "XTest"
-        )
+        _write_composition(tmp_path / "composition.yaml", "comp", "example.org", "XTest")
+        _write_xrd(tmp_path / "xrd.yaml", "xtests.example.org", "example.org", "XTest")
         # Write a functions.yaml
         func_doc = {
             "apiVersion": "pkg.crossplane.io/v1beta1",
@@ -145,23 +131,15 @@ class TestDiscoverPackage:
         assert result.entries[0].functions_path == str(tmp_path / "functions.yaml")
 
     def test_explicit_functions_path_overrides(self, tmp_path):
-        _write_composition(
-            tmp_path / "composition.yaml", "comp", "example.org", "XTest"
-        )
-        _write_xrd(
-            tmp_path / "xrd.yaml", "xtests.example.org", "example.org", "XTest"
-        )
+        _write_composition(tmp_path / "composition.yaml", "comp", "example.org", "XTest")
+        _write_xrd(tmp_path / "xrd.yaml", "xtests.example.org", "example.org", "XTest")
 
         result = discover_package(str(tmp_path), functions_path="/explicit/functions.yaml")
         assert result.entries[0].functions_path == "/explicit/functions.yaml"
 
     def test_scan_duration_recorded(self, tmp_path):
-        _write_composition(
-            tmp_path / "composition.yaml", "comp", "example.org", "XTest"
-        )
-        _write_xrd(
-            tmp_path / "xrd.yaml", "xtests.example.org", "example.org", "XTest"
-        )
+        _write_composition(tmp_path / "composition.yaml", "comp", "example.org", "XTest")
+        _write_xrd(tmp_path / "xrd.yaml", "xtests.example.org", "example.org", "XTest")
 
         result = discover_package(str(tmp_path))
         assert result.scan_duration_s >= 0.0

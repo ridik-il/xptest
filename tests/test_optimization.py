@@ -63,7 +63,8 @@ def _make_snapshot(
         case_id=case_id,
         input_flat={"spec.engine": "aurora-postgresql"},
         resources=resources,
-        edges=edges or [
+        edges=edges
+        or [
             ("db|DBSubnetGroup|subnet-group", "db|DBCluster|aurora"),
             ("tde|XSecurityGroup|sg", "db|DBCluster|aurora"),
             ("crossplane|XSecretKeeper|secret", "db|DBCluster|aurora"),

@@ -111,11 +111,7 @@ class TestGenerateXrFromXrd:
 
     def test_array_field_defaults_empty(self):
         xr = generate_xr_from_xrd(
-            self._xrd(
-                properties={
-                    "tags": {"type": "array", "items": {"type": "string"}}
-                }
-            ),
+            self._xrd(properties={"tags": {"type": "array", "items": {"type": "string"}}}),
             self._comp(),
         )
         assert xr["spec"]["tags"] == []
@@ -285,9 +281,7 @@ spec:
             side_effect=FileNotFoundError,
         ):
             try:
-                render_composition(
-                    "/tmp/comp.yaml", "xr", "funcs"
-                )
+                render_composition("/tmp/comp.yaml", "xr", "funcs")
                 assert False, "Should have raised"
             except RenderUnavailable:
                 pass
@@ -300,9 +294,7 @@ spec:
 
         with patch("xptest.render.subprocess.run", return_value=mock_result):
             try:
-                render_composition(
-                    "/tmp/comp.yaml", "xr", "funcs"
-                )
+                render_composition("/tmp/comp.yaml", "xr", "funcs")
                 assert False, "Should have raised"
             except RenderError as exc:
                 assert "nil pointer" in exc.stderr
@@ -315,9 +307,7 @@ spec:
             side_effect=sp.TimeoutExpired("cmd", 10),
         ):
             try:
-                render_composition(
-                    "/tmp/comp.yaml", "xr", "funcs"
-                )
+                render_composition("/tmp/comp.yaml", "xr", "funcs")
                 assert False, "Should have raised"
             except RenderError:
                 pass
@@ -346,10 +336,6 @@ class TestGenerateSpecDefaults:
         assert defaults["networking"]["enableDns"] is False
 
     def test_default_value_used(self):
-        schema = {
-            "properties": {
-                "region": {"type": "string", "default": "eu-west-1"}
-            }
-        }
+        schema = {"properties": {"region": {"type": "string", "default": "eu-west-1"}}}
         defaults = _generate_spec_defaults(schema)
         assert defaults["region"] == "eu-west-1"

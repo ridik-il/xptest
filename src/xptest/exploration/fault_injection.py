@@ -139,9 +139,7 @@ def run_fault_injection(
     fault_snapshots: list[RenderedGraphSnapshot] = []
 
     for target_name in sweep_order:
-        fault_path = generate_fault_observed_resources(
-            obj, target_name, healthy_status
-        )
+        fault_path = generate_fault_observed_resources(obj, target_name, healthy_status)
 
         try:
             fault_obj = loader_load(
@@ -166,43 +164,45 @@ def run_fault_injection(
             # Check if target resource disappeared from output
             rendered_names = {r.name for r in fault_obj.resources}
             if target_name not in rendered_names:
-                findings.append(Finding(
-                    layer=7,
-                    rule="fi/resource-disappeared-under-fault",
-                    resource=target_name,
-                    path="",
-                    severity=Severity.WARNING,
-                    message=(
-                        f"Resource '{target_name}' disappeared from render output "
-                        f"when injected with ReconcileError fault."
-                    ),
-                    remediation=(
-                        "Ensure template conditions handle NotReady state "
-                        "without dropping resources."
-                    ),
-                    finding_id="fi/resource-disappeared-under-fault",
-                    category="fault-injection",
-                    case_id=case_id,
-                ))
+                findings.append(
+                    Finding(
+                        layer=7,
+                        rule="fi/resource-disappeared-under-fault",
+                        resource=target_name,
+                        path="",
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Resource '{target_name}' disappeared from render output "
+                            f"when injected with ReconcileError fault."
+                        ),
+                        remediation=(
+                            "Ensure template conditions handle NotReady state "
+                            "without dropping resources."
+                        ),
+                        finding_id="fi/resource-disappeared-under-fault",
+                        category="fault-injection",
+                        case_id=case_id,
+                    )
+                )
 
         except LoadError as exc:
-            findings.append(Finding(
-                layer=7,
-                rule="fi/render-failed-under-fault",
-                resource=target_name,
-                path="",
-                severity=Severity.CRITICAL,
-                message=(
-                    f"Render failed when '{target_name}' was faulted: {exc}"
-                ),
-                remediation=(
-                    "Template cannot handle resource failure state. "
-                    "Add error handling in composition logic."
-                ),
-                finding_id="fi/render-failed-under-fault",
-                category="fault-injection",
-                case_id=f"fault|{target_name}",
-            ))
+            findings.append(
+                Finding(
+                    layer=7,
+                    rule="fi/render-failed-under-fault",
+                    resource=target_name,
+                    path="",
+                    severity=Severity.CRITICAL,
+                    message=(f"Render failed when '{target_name}' was faulted: {exc}"),
+                    remediation=(
+                        "Template cannot handle resource failure state. "
+                        "Add error handling in composition logic."
+                    ),
+                    finding_id="fi/render-failed-under-fault",
+                    category="fault-injection",
+                    case_id=f"fault|{target_name}",
+                )
+            )
         finally:
             Path(fault_path).unlink(missing_ok=True)
 
@@ -227,10 +227,7 @@ def compute_mutation_score(
             "mutation_score": 1.0,
         }
 
-    detected = sum(
-        1 for f in findings
-        if f.rule.startswith("fi/") or f.rule.startswith("inv/")
-    )
+    detected = sum(1 for f in findings if f.rule.startswith("fi/") or f.rule.startswith("inv/"))
     score = detected / total_faults_injected
 
     return {

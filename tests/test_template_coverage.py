@@ -9,8 +9,7 @@ import pytest
 from xptest.exploration.template_coverage import CoverageReport, measure_coverage
 
 _GO_HELPER = (
-    Path(__file__).resolve().parent.parent
-    / "tools/template-coverage/bin/template-coverage"
+    Path(__file__).resolve().parent.parent / "tools/template-coverage/bin/template-coverage"
 )
 _has_go_helper = _GO_HELPER.exists() and _GO_HELPER.is_file()
 

@@ -151,9 +151,7 @@ class TestRunWithoutOpa:
 class TestRunMocked:
     def _mock_opa_result(self, violations: list[dict]):
         """Build the JSON structure OPA eval returns."""
-        return json.dumps(
-            {"result": [{"expressions": [{"value": violations}]}]}
-        )
+        return json.dumps({"result": [{"expressions": [{"value": violations}]}]})
 
     @patch("xptest.layer3.policy._run_opa_query")
     def test_rds_encryption_violation(self, mock_query):
@@ -244,9 +242,7 @@ class TestOpaIntegration:
         self._assert_expected_rules(findings, expected)
 
     def test_valid_composition_no_policy_findings(self):
-        obj = load(
-            str(FIXTURES_DIR / "valid" / "vpc-subnet-iam.yaml"), XRD_PATH
-        )
+        obj = load(str(FIXTURES_DIR / "valid" / "vpc-subnet-iam.yaml"), XRD_PATH)
         cfg = _config()
         findings = layer3.run(obj, cfg)
         # Valid composition should have no policy violations

@@ -85,10 +85,7 @@ class TestL107TemplateVariableValidation:
                             "openAPIV3Schema": {
                                 "properties": {
                                     "spec": {
-                                        "properties": {
-                                            k: {"type": "string"}
-                                            for k in xrd_params
-                                        }
+                                        "properties": {k: {"type": "string"} for k in xrd_params}
                                     }
                                 }
                             }
@@ -125,11 +122,13 @@ class TestL107TemplateVariableValidation:
     def test_no_warning_for_known_roots(self):
         from xptest.layer1.static import _check_template_variables
 
-        obj = self._make_obj([
-            "observed.composite.resource.spec.region",
-            "desired.composite.resource.status.id",
-            "spec.forProvider.region",
-        ])
+        obj = self._make_obj(
+            [
+                "observed.composite.resource.spec.region",
+                "desired.composite.resource.status.id",
+                "spec.forProvider.region",
+            ]
+        )
         findings = _check_template_variables(obj)
         assert len(findings) == 0
 

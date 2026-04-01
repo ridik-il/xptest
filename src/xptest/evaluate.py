@@ -64,7 +64,8 @@ def _run_pipeline(
             import logging
 
             logging.getLogger("xptest.evaluate").warning(
-                "Layer 3 evaluation failed: %s", exc,
+                "Layer 3 evaluation failed: %s",
+                exc,
             )
 
     return [
@@ -107,9 +108,7 @@ def run_evaluation(
             sys.stderr.write(f"  ERROR on {stem}: {exc}\n")
 
     fixture_results = compute_fixture_metrics(fixtures_dir, findings_by_fixture)
-    layer_metrics = aggregate_by_layer(
-        fixture_results, findings_by_fixture, fixtures_dir
-    )
+    layer_metrics = aggregate_by_layer(fixture_results, findings_by_fixture, fixtures_dir)
     report = generate_report(layer_metrics, fixture_results)
 
     # Additional §3.3.4 metrics
@@ -160,16 +159,23 @@ def _compute_additional_metrics(
             result["tway_coverage"] = compute_tway_coverage(candidates, params, t=2)
         else:
             result["tway_coverage"] = {
-                "t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0,
+                "t": 2,
+                "total_tuples": 0,
+                "covered_tuples": 0,
+                "coverage_pct": 100.0,
             }
     except Exception as exc:
         import logging
 
         logging.getLogger("xptest.evaluate").warning(
-            "t-way coverage computation failed: %s", exc,
+            "t-way coverage computation failed: %s",
+            exc,
         )
         result["tway_coverage"] = {
-            "t": 2, "total_tuples": 0, "covered_tuples": 0, "coverage_pct": 100.0,
+            "t": 2,
+            "total_tuples": 0,
+            "covered_tuples": 0,
+            "coverage_pct": 100.0,
         }
 
     # Mutation score from all fault-injection findings across fixtures
@@ -208,10 +214,14 @@ def _compute_additional_metrics(
                 obj_b = load(str(yaml_file), xrd_path)
                 no_input: dict[str, object] = {}
                 snap_a = build_snapshot(
-                    obj_a, case_id=f"det-a-{yaml_file.stem}", input_flat=no_input,
+                    obj_a,
+                    case_id=f"det-a-{yaml_file.stem}",
+                    input_flat=no_input,
                 )
                 snap_b = build_snapshot(
-                    obj_b, case_id=f"det-b-{yaml_file.stem}", input_flat=no_input,
+                    obj_b,
+                    case_id=f"det-b-{yaml_file.stem}",
+                    input_flat=no_input,
                 )
                 run_a.append(snap_a)
                 run_b.append(snap_b)
@@ -219,23 +229,25 @@ def _compute_additional_metrics(
                 import logging
 
                 logging.getLogger("xptest.evaluate").debug(
-                    "determinism load failed for %s: %s", yaml_file.stem, exc,
+                    "determinism load failed for %s: %s",
+                    yaml_file.stem,
+                    exc,
                 )
                 continue
     if run_a and len(run_a) == len(run_b):
         result["determinism_score"] = compute_determinism_score(run_a, run_b)
     else:
         result["determinism_score"] = {
-            "total_inputs": 0, "identical_outputs": 0, "determinism_score": 1.0,
+            "total_inputs": 0,
+            "identical_outputs": 0,
+            "determinism_score": 1.0,
         }
 
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run xptest evaluation across all fixtures."
-    )
+    parser = argparse.ArgumentParser(description="Run xptest evaluation across all fixtures.")
     parser.add_argument(
         "--fixtures-dir",
         default=None,

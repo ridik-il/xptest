@@ -74,9 +74,7 @@ def load(
     xrd_kind = xrd_spec.get("names", {}).get("kind", "")
     xrd_versions = xrd_spec.get("versions", [])
     xrd_version = xrd_versions[0].get("name", "") if xrd_versions else ""
-    xrd_api_version = (
-        f"{xrd_group}/{xrd_version}" if xrd_group and xrd_version else ""
-    )
+    xrd_api_version = f"{xrd_group}/{xrd_version}" if xrd_group and xrd_version else ""
 
     resources: list[ComposedResource] = []
     actual_render_mode = RenderMode.STATIC_PARSE
@@ -167,9 +165,7 @@ def _load_pipeline_resources(
                 environment_config_paths=environment_config_paths,
                 observed_resources_path=observed_resources_path,
             )
-            resources = _parse_rendered_output(
-                rendered, xrd_api_version, xrd_kind
-            )
+            resources = _parse_rendered_output(rendered, xrd_api_version, xrd_kind)
             if resources:
                 return resources, RenderMode.RENDER
         except RenderUnavailable:
@@ -184,8 +180,7 @@ def _load_pipeline_resources(
         except RenderError as exc:
             if render_mode == "render":
                 raise LoadError(
-                    f"{composition_path}: crossplane render failed: "
-                    f"{exc}. stderr: {exc.stderr}"
+                    f"{composition_path}: crossplane render failed: {exc}. stderr: {exc.stderr}"
                 ) from None
             # Fall through to degraded parse
 
@@ -239,12 +234,7 @@ def _parse_rendered_output(
         if kind in {"Composition", "CompositeResourceDefinition", "Function"}:
             continue
         # Skip the rendered XR itself
-        if (
-            xrd_api_version
-            and xrd_kind
-            and api_version == xrd_api_version
-            and kind == xrd_kind
-        ):
+        if xrd_api_version and xrd_kind and api_version == xrd_api_version and kind == xrd_kind:
             continue
 
         metadata = doc.get("metadata", {})
@@ -338,16 +328,23 @@ def _run_crossplane_render(
     # --- Fast path: reuse proven command + functions variant ---
     if _working_render_cmd is not None and _working_functions_variant is not None:
         fn_path = _resolve_functions_variant(
-            functions_path, _working_functions_variant,
+            functions_path,
+            _working_functions_variant,
         )
         base_args = _build_render_args(
-            xr_path, composition_path, fn_path,
-            environment_config_paths, observed_resources_path,
+            xr_path,
+            composition_path,
+            fn_path,
+            environment_config_paths,
+            observed_resources_path,
         )
         cmd = [*_working_render_cmd, *base_args]
         try:
             result = subprocess.run(
-                cmd, check=False, capture_output=True, text=True,
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
                 timeout=timeout_seconds,
             )
             if result.returncode == 0:
@@ -356,13 +353,10 @@ def _run_crossplane_render(
             # fall through to full discovery.
         except FileNotFoundError:
             raise LoadError(
-                "crossplane CLI not found. "
-                "Install Crossplane CLI to use render mode."
+                "crossplane CLI not found. Install Crossplane CLI to use render mode."
             ) from None
         except subprocess.TimeoutExpired:
-            raise LoadError(
-                f"crossplane render timed out after {timeout_seconds}s"
-            ) from None
+            raise LoadError(f"crossplane render timed out after {timeout_seconds}s") from None
         finally:
             temp_files.clear()
 
@@ -375,8 +369,11 @@ def _run_crossplane_render(
         last_error = ""
         for variant_key, candidate_fn_path in candidate_variants:
             base_args = _build_render_args(
-                xr_path, composition_path, candidate_fn_path,
-                environment_config_paths, observed_resources_path,
+                xr_path,
+                composition_path,
+                candidate_fn_path,
+                environment_config_paths,
+                observed_resources_path,
             )
 
             cmd_prefixes = [
@@ -388,18 +385,19 @@ def _run_crossplane_render(
                 cmd = [*prefix, *base_args]
                 try:
                     result = subprocess.run(
-                        cmd, check=False, capture_output=True,
-                        text=True, timeout=timeout_seconds,
+                        cmd,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
                     )
                 except FileNotFoundError:
                     raise LoadError(
-                        "crossplane CLI not found. "
-                        "Install Crossplane CLI to use render mode."
+                        "crossplane CLI not found. Install Crossplane CLI to use render mode."
                     ) from None
                 except subprocess.TimeoutExpired:
                     raise LoadError(
-                        f"crossplane render timed out "
-                        f"after {timeout_seconds}s"
+                        f"crossplane render timed out after {timeout_seconds}s"
                     ) from None
 
                 if result.returncode == 0:
@@ -414,24 +412,14 @@ def _run_crossplane_render(
                     or 'unknown command "beta"' in stderr
                     or 'unknown command "render"' in stderr
                 ):
-                    last_error = (
-                        result.stderr.strip() or result.stdout.strip()
-                    )
+                    last_error = result.stderr.strip() or result.stdout.strip()
                     continue
 
-                last_error = (
-                    result.stderr.strip()
-                    or result.stdout.strip()
-                    or "unknown error"
-                )
+                last_error = result.stderr.strip() or result.stdout.strip() or "unknown error"
 
         raise LoadError(
             "crossplane render failed: "
-            + (
-                last_error
-                or "render command is unavailable in this "
-                "Crossplane CLI version"
-            )
+            + (last_error or "render command is unavailable in this Crossplane CLI version")
         )
     finally:
         # Only clean up temp files that are NOT in the rewrite cache.
@@ -550,7 +538,9 @@ def _get_container_ip(container_name: str) -> str | None:
     try:
         result = subprocess.run(
             [
-                "docker", "inspect", "-f",
+                "docker",
+                "inspect",
+                "-f",
                 "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
                 container_name,
             ],

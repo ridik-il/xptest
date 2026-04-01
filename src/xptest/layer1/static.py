@@ -255,18 +255,42 @@ def _check_environment_config_present(obj: CompositionObject) -> list[Finding]:
 # Extended per provider bundle release.
 _DEPRECATED_FIELDS: list[tuple[str, str, str, str]] = [
     # AWS provider deprecated fields
-    ("aws.upbound.io", "SecurityGroup", "spec.forProvider.ingress",
-     "Use SecurityGroupRule resources instead of inline ingress rules."),
-    ("aws.upbound.io", "SecurityGroup", "spec.forProvider.egress",
-     "Use SecurityGroupRule resources instead of inline egress rules."),
-    ("ec2.aws.upbound.io", "SecurityGroup", "spec.forProvider.ingress",
-     "Use SecurityGroupRule resources instead of inline ingress rules."),
-    ("ec2.aws.upbound.io", "SecurityGroup", "spec.forProvider.egress",
-     "Use SecurityGroupRule resources instead of inline egress rules."),
-    ("s3.aws.upbound.io", "Bucket", "spec.forProvider.acl",
-     "Use BucketAcl resource instead of inline acl field."),
-    ("aws.upbound.io", "Bucket", "spec.forProvider.acl",
-     "Use BucketAcl resource instead of inline acl field."),
+    (
+        "aws.upbound.io",
+        "SecurityGroup",
+        "spec.forProvider.ingress",
+        "Use SecurityGroupRule resources instead of inline ingress rules.",
+    ),
+    (
+        "aws.upbound.io",
+        "SecurityGroup",
+        "spec.forProvider.egress",
+        "Use SecurityGroupRule resources instead of inline egress rules.",
+    ),
+    (
+        "ec2.aws.upbound.io",
+        "SecurityGroup",
+        "spec.forProvider.ingress",
+        "Use SecurityGroupRule resources instead of inline ingress rules.",
+    ),
+    (
+        "ec2.aws.upbound.io",
+        "SecurityGroup",
+        "spec.forProvider.egress",
+        "Use SecurityGroupRule resources instead of inline egress rules.",
+    ),
+    (
+        "s3.aws.upbound.io",
+        "Bucket",
+        "spec.forProvider.acl",
+        "Use BucketAcl resource instead of inline acl field.",
+    ),
+    (
+        "aws.upbound.io",
+        "Bucket",
+        "spec.forProvider.acl",
+        "Use BucketAcl resource instead of inline acl field.",
+    ),
 ]
 
 
@@ -285,18 +309,20 @@ def _check_deprecated_fields(obj: CompositionObject) -> list[Finding]:
                 continue
             # Navigate the dot-path to check if field is present
             if _field_exists(res.spec, field_path.removeprefix("spec.")):
-                findings.append(Finding(
-                    layer=1,
-                    rule="L1-05/deprecated-field",
-                    resource=res.name,
-                    path=field_path,
-                    severity=Severity.WARNING,
-                    message=(
-                        f"Resource '{res.name}' ({res.api_version}/{res.kind}) "
-                        f"uses deprecated field '{field_path}'."
-                    ),
-                    remediation=remedy,
-                ))
+                findings.append(
+                    Finding(
+                        layer=1,
+                        rule="L1-05/deprecated-field",
+                        resource=res.name,
+                        path=field_path,
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Resource '{res.name}' ({res.api_version}/{res.kind}) "
+                            f"uses deprecated field '{field_path}'."
+                        ),
+                        remediation=remedy,
+                    )
+                )
     return findings
 
 
@@ -373,13 +399,8 @@ def _check_template_variables(
                 )
 
             # Check 2: observed.composite.resource.spec.X — validate X against XRD
-            if (
-                xrd_params
-                and expr.startswith("observed.composite.resource.spec.")
-            ):
-                spec_path = expr.removeprefix(
-                    "observed.composite.resource.spec."
-                )
+            if xrd_params and expr.startswith("observed.composite.resource.spec."):
+                spec_path = expr.removeprefix("observed.composite.resource.spec.")
                 top_field = spec_path.split(".")[0]
                 if top_field and top_field not in xrd_params:
                     findings.append(
