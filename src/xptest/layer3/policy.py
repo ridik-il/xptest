@@ -189,8 +189,7 @@ def _normalize_opa_value(value: Any) -> list[dict[str, Any]]:
 
     if isinstance(value, dict):
         if value and all(
-            isinstance(key, str) and isinstance(enabled, bool)
-            for key, enabled in value.items()
+            isinstance(key, str) and isinstance(enabled, bool) for key, enabled in value.items()
         ):
             for key, enabled in value.items():
                 if not enabled:
