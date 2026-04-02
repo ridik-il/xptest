@@ -181,6 +181,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="AWS region to query (overrides config aws_region).",
     )
     drift.add_argument(
+        "--functions",
+        default=None,
+        help="Path to functions.yaml for crossplane render (required for go-templating compositions).",
+    )
+    drift.add_argument(
         "--output",
         default="drift-findings.json",
         help="Output path for drift findings JSON (default: drift-findings.json).",
@@ -395,6 +400,7 @@ def _cmd_drift(args: argparse.Namespace) -> int:
             composition_path=args.composition,
             xrd_path=args.xrd,
             crd_bundle_path=cfg.crd_bundle_path,
+            functions_path=args.functions,
         )
     except LoadError as exc:
         sys.stderr.write(f"xptest: load error — {exc}\n")
@@ -1024,8 +1030,20 @@ def _field_options(field_name: str, field_schema: dict) -> list:
     if field_type == "object":
         # For objects, generate combinations from required fields first,
         # otherwise from the first few declared properties.
-        props = field_schema.get("properties", {})
-        required = [f for f in field_schema.get("required", []) if f in props]
+        props = dict(field_schema.get("properties", {}))
+        required = list(field_schema.get("required", []))
+
+        # Collect required fields and properties from allOf/oneOf branches
+        for constraint in field_schema.get("allOf", []):
+            for k, v in constraint.get("properties", {}).items():
+                props.setdefault(k, v)
+            required.extend(constraint.get("required", []))
+        for constraint in field_schema.get("oneOf", [])[:1]:
+            for k, v in constraint.get("properties", {}).items():
+                props.setdefault(k, v)
+            required.extend(constraint.get("required", []))
+
+        required = [f for f in dict.fromkeys(required) if f in props]
         fields = required if required else list(props.keys())[:2]
         if not fields:
             return [{}]

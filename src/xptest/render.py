@@ -138,7 +138,17 @@ def _generate_spec_defaults(
     For other optional fields: include with sensible defaults so templates
     that reference them don't produce nil errors.
     """
-    properties = spec_schema.get("properties", {})
+    properties = dict(spec_schema.get("properties", {}))
+
+    # Merge properties from allOf/oneOf branches so nested required fields
+    # are discovered and populated with defaults.
+    for constraint in spec_schema.get("allOf", []):
+        for k, v in constraint.get("properties", {}).items():
+            properties.setdefault(k, v)
+    for constraint in spec_schema.get("oneOf", [])[:1]:
+        for k, v in constraint.get("properties", {}).items():
+            properties.setdefault(k, v)
+
     defaults: dict[str, Any] = {}
 
     for name, prop in properties.items():

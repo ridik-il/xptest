@@ -264,13 +264,30 @@ def _parse_from_render(
     xrd_kind: str,
 ) -> list[ComposedResource]:
     """Render Composition via Crossplane CLI and parse resulting managed resources."""
-    rendered = _run_crossplane_render(
-        composition_path=composition_path,
-        xr_path=xr_path,
-        functions_path=functions_path,
-        observed_resources_path=observed_resources_path,
-        environment_config_paths=environment_config_paths,
-    )
+    try:
+        rendered = _run_crossplane_render(
+            composition_path=composition_path,
+            xr_path=xr_path,
+            functions_path=functions_path,
+            observed_resources_path=observed_resources_path,
+            environment_config_paths=environment_config_paths,
+        )
+    except LoadError:
+        # Fall back to render.py which handles Development-mode functions natively
+        from xptest.render import RenderError, RenderUnavailable, render_composition
+
+        xr_yaml = Path(xr_path).read_text()
+        functions_yaml = Path(functions_path).read_text()
+        try:
+            rendered = render_composition(
+                composition_path=composition_path,
+                xr_yaml=xr_yaml,
+                functions_yaml=functions_yaml,
+                environment_config_paths=environment_config_paths,
+                observed_resources_path=observed_resources_path,
+            )
+        except (RenderError, RenderUnavailable) as exc:
+            raise LoadError(str(exc)) from exc
 
     docs = list(yaml.safe_load_all(rendered))
     resources: list[ComposedResource] = []
