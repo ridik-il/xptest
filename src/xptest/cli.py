@@ -65,8 +65,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--xr",
         default=None,
         help=(
-            "Path to XR/claim YAML used for crossplane render. "
+            "Path to XR YAML used for crossplane render. "
             "When set together with --functions, xptest evaluates real go-templating output."
+        ),
+    )
+    val.add_argument(
+        "--claim",
+        default=None,
+        help=(
+            "Path to a namespace-scoped Claim (XRC) YAML. "
+            "xptest converts it to an XR automatically using the XRD, then renders. "
+            "Mutually exclusive with --xr. Useful for GitOps promotion pipelines."
         ),
     )
     val.add_argument(
@@ -218,6 +227,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional base XR YAML. If omitted, inputs are auto-generated from XRD.",
     )
     exp.add_argument(
+        "--claim",
+        default=None,
+        help=(
+            "Path to a namespace-scoped Claim (XRC) YAML. "
+            "Converted to XR automatically. Mutually exclusive with --xr."
+        ),
+    )
+    exp.add_argument(
         "--observed-resources",
         default=None,
         help="Optional observed-resources YAML for baseline renders.",
@@ -283,6 +300,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to functions.yaml for render mode (optional, auto-detected).",
     )
     scan.add_argument(
+        "--claims-dir",
+        default=None,
+        help=(
+            "Directory containing Claim (XRC) YAML files. "
+            "Each claim is matched to its composition via the XRD and converted to an XR "
+            "for rendering. Useful for scanning a GitOps promotion repo."
+        ),
+    )
+    scan.add_argument(
         "--config",
         default=None,
         help="Path to xptest.yaml config file.",
@@ -316,11 +342,17 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         sys.stderr.write(f"xptest: config error — {exc}\n")
         return 1
 
+    if args.claim and args.xr:
+        sys.stderr.write("xptest: --claim and --xr are mutually exclusive\n")
+        return 1
+
     try:
         args.composition = _resolve_input_path(args.composition)
         args.xrd = _resolve_input_path(args.xrd)
         if args.xr:
             args.xr = _resolve_input_path(args.xr)
+        if args.claim:
+            args.claim = _resolve_input_path(args.claim)
         if args.functions:
             args.functions = _resolve_input_path(args.functions)
         if args.observed_resources:
@@ -334,6 +366,12 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     except (FileNotFoundError, ValueError) as exc:
         sys.stderr.write(f"xptest: path resolution error — {exc}\n")
         return 1
+
+    # Convert claim to XR if --claim was provided
+    if args.claim:
+        args.xr = _convert_claim_to_xr_file(args.claim, args.xrd, args.composition)
+        if args.xr is None:
+            return 1
 
     if args.base_xr and args.auto_xr_combinations <= 0:
         sys.stderr.write("xptest: --base-xr requires --auto-xr-combinations\n")
@@ -479,6 +517,17 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         compute_baseline_min_count,
     )
     from xptest.exploration.template_coverage import measure_coverage
+
+    if getattr(args, "claim", None) and args.xr:
+        sys.stderr.write("xptest: --claim and --xr are mutually exclusive\n")
+        return 1
+
+    # Convert claim → XR if provided
+    if getattr(args, "claim", None):
+        args.claim = _resolve_input_path(args.claim)
+        args.xr = _convert_claim_to_xr_file(args.claim, args.xrd, args.composition)
+        if args.xr is None:
+            return 1
 
     progress.init()
     render_mode = getattr(args, "render_mode", "auto")
@@ -1630,6 +1679,118 @@ def _load_xr_input_flat(xr_path: str | None) -> dict[str, Any]:
     return {}
 
 
+def _convert_claim_to_xr_file(
+    claim_path: str,
+    xrd_path: str,
+    composition_path: str,
+) -> str | None:
+    """Read a Claim YAML, convert to XR, write to a temp file.
+
+    Returns the temp file path on success, or ``None`` on error.
+    """
+    from xptest.render import claim_to_xr
+
+    try:
+        with open(claim_path) as fh:
+            claim_doc = yaml.safe_load(fh)
+        with open(xrd_path) as fh:
+            xrd_doc = yaml.safe_load(fh)
+        with open(composition_path) as fh:
+            comp_doc = yaml.safe_load(fh)
+    except Exception as exc:
+        sys.stderr.write(f"xptest: failed to read claim/xrd/composition — {exc}\n")
+        return None
+
+    xr_doc = claim_to_xr(claim_doc, xrd_doc, comp_doc)
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix="-xr.yaml", prefix="xptest-claim-", delete=False
+    )
+    yaml.safe_dump(xr_doc, tmp, sort_keys=False)
+    tmp.close()
+
+    claim_name = claim_doc.get("metadata", {}).get("name", "?")
+    claim_ns = claim_doc.get("metadata", {}).get("namespace", "default")
+    sys.stderr.write(
+        f"xptest: converted claim {claim_ns}/{claim_name} → XR ({xr_doc['kind']}) at {tmp.name}\n"
+    )
+    return tmp.name
+
+
+def _match_claims_to_entries(
+    claims_dir: str,
+    entries: list,
+) -> dict[str, str]:
+    """Match Claim YAMLs in a directory to scan entries via XRD claimNames.
+
+    Returns a dict mapping ``xrd_path → temp_xr_path`` for each matched claim.
+    """
+    from xptest.render import claim_to_xr
+
+    claims_path = Path(claims_dir)
+    if not claims_path.is_dir():
+        sys.stderr.write(f"xptest: --claims-dir '{claims_dir}' is not a directory\n")
+        return {}
+
+    # Load all claim YAMLs
+    claim_docs: list[tuple[str, dict]] = []
+    for p in sorted(claims_path.glob("**/*.yaml")):
+        try:
+            with open(p) as fh:
+                for doc in yaml.safe_load_all(fh):
+                    if doc and isinstance(doc, dict):
+                        claim_docs.append((str(p), doc))
+        except Exception:
+            continue
+    for p in sorted(claims_path.glob("**/*.yml")):
+        try:
+            with open(p) as fh:
+                for doc in yaml.safe_load_all(fh):
+                    if doc and isinstance(doc, dict):
+                        claim_docs.append((str(p), doc))
+        except Exception:
+            continue
+
+    # Build index: claim_kind → [(path, doc)]
+    claim_by_kind: dict[str, list[tuple[str, dict]]] = {}
+    for path, doc in claim_docs:
+        kind = doc.get("kind", "")
+        claim_by_kind.setdefault(kind, []).append((path, doc))
+
+    # Match entries to claims via XRD claimNames.kind
+    result: dict[str, str] = {}
+    for entry in entries:
+        try:
+            with open(entry.xrd_path) as fh:
+                xrd_doc = yaml.safe_load(fh)
+            with open(entry.composition_path) as fh:
+                comp_doc = yaml.safe_load(fh)
+        except Exception:
+            continue
+
+        claim_kind = xrd_doc.get("spec", {}).get("claimNames", {}).get("kind", "")
+        if not claim_kind or claim_kind not in claim_by_kind:
+            continue
+
+        # Use the first matching claim for this composition
+        claim_path, claim_doc = claim_by_kind[claim_kind][0]
+        xr_doc = claim_to_xr(claim_doc, xrd_doc, comp_doc)
+
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix="-xr.yaml", prefix="xptest-claim-", delete=False
+        )
+        yaml.safe_dump(xr_doc, tmp, sort_keys=False)
+        tmp.close()
+
+        claim_name = claim_doc.get("metadata", {}).get("name", "?")
+        sys.stderr.write(
+            f"xptest: matched claim '{claim_name}' ({claim_kind}) → {entry.composition_name}\n"
+        )
+        result[entry.xrd_path] = tmp.name
+
+    return result
+
+
 def _resolve_input_path(path: str) -> str:
     """Resolve a CLI file path from common repository layouts.
 
@@ -1845,16 +2006,25 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     fail_count = 0
     error_count = 0
 
+    # Build claim → XR mapping if --claims-dir was provided
+    claim_xr_map: dict[str, str] = {}  # xrd_path → temp XR path
+    if getattr(args, "claims_dir", None):
+        claim_xr_map = _match_claims_to_entries(args.claims_dir, result.entries)
+        if claim_xr_map:
+            progress.step(f"{len(claim_xr_map)} claim(s) matched to compositions")
+
     for idx, entry in enumerate(result.entries):
         comp_start = time.monotonic()
         progress.combo(idx, len(result.entries), entry.composition_name)
+
+        xr_path = claim_xr_map.get(entry.xrd_path)
 
         try:
             obj = load(
                 composition_path=entry.composition_path,
                 xrd_path=entry.xrd_path,
                 crd_bundle_path=cfg.crd_bundle_path,
-                xr_path=None,
+                xr_path=xr_path,
                 functions_path=entry.functions_path,
                 observed_resources_path=None,
                 environment_config_paths=entry.environment_config_paths,

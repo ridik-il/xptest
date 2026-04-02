@@ -71,6 +71,70 @@ def crossplane_cli_available() -> bool:
         return False
 
 
+def claim_to_xr(
+    claim_doc: dict[str, Any],
+    xrd_doc: dict[str, Any],
+    composition_doc: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert a namespace-scoped Claim (XRC) to a cluster-scoped XR.
+
+    In Crossplane the Claim is what application teams submit in GitOps repos.
+    ``crossplane render`` expects an XR, not a claim.  This function performs
+    the conversion by:
+
+    * Replacing the claim kind with the composite kind from the XRD
+    * Stripping the namespace from metadata (XR is cluster-scoped)
+    * Propagating ``crossplane.io/claim-*`` labels so composition templates
+      that read those labels (e.g. for naming) work correctly
+    * Copying the claim's spec verbatim (the schema is identical)
+    """
+    xrd_spec = xrd_doc.get("spec", {})
+    group = xrd_spec.get("group", "example.org")
+    names = xrd_spec.get("names", {})
+    xr_kind = names.get("kind", "XResource")
+    versions = xrd_spec.get("versions", [])
+    version_name = versions[0].get("name", "v1alpha1") if versions else "v1alpha1"
+
+    # Prefer compositeTypeRef from composition for apiVersion/kind
+    comp_spec = composition_doc.get("spec", {})
+    type_ref = comp_spec.get("compositeTypeRef", {})
+    api_version = type_ref.get("apiVersion", f"{group}/{version_name}")
+    ref_kind = type_ref.get("kind", xr_kind)
+
+    claim_meta = claim_doc.get("metadata", {})
+    claim_name = claim_meta.get("name", "xptest-claim")
+    claim_namespace = claim_meta.get("namespace", "default")
+
+    # Preserve existing labels from the claim, add crossplane labels
+    labels = dict(claim_meta.get("labels", {}))
+    labels.update(
+        {
+            "crossplane.io/claim-name": claim_name,
+            "crossplane.io/claim-namespace": claim_namespace,
+            "crossplane.io/composite": claim_name,
+        }
+    )
+
+    # Preserve existing annotations from the claim
+    annotations = dict(claim_meta.get("annotations", {}))
+
+    xr_metadata: dict[str, Any] = {
+        "name": claim_name,
+        "labels": labels,
+    }
+    if annotations:
+        xr_metadata["annotations"] = annotations
+
+    xr: dict[str, Any] = {
+        "apiVersion": api_version,
+        "kind": ref_kind,
+        "metadata": xr_metadata,
+        "spec": claim_doc.get("spec", {}),
+    }
+
+    return xr
+
+
 def generate_xr_from_xrd(
     xrd_doc: dict[str, Any],
     composition_doc: dict[str, Any],
