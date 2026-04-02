@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import tempfile
 from dataclasses import asdict, replace
@@ -91,6 +92,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Auto-generate up to N XR parameter combinations from the XRD and run validation "
             "for each combination. Requires --functions and no --xr."
+        ),
+    )
+    val.add_argument(
+        "--base-xr",
+        nargs="+",
+        default=None,
+        help=(
+            "One or more known-good XR YAML files to use as base templates for mutation-based "
+            "auto-XR generation. Used with --auto-xr-combinations. Each base is mutated "
+            "one field at a time using valid values from the XRD schema."
         ),
     )
     val.add_argument(
@@ -318,8 +329,14 @@ def _cmd_validate(args: argparse.Namespace) -> int:
             args.environment_configs = [
                 _resolve_input_path(path) for path in args.environment_configs
             ]
+        if args.base_xr:
+            args.base_xr = [_resolve_input_path(path) for path in args.base_xr]
     except (FileNotFoundError, ValueError) as exc:
         sys.stderr.write(f"xptest: path resolution error — {exc}\n")
+        return 1
+
+    if args.base_xr and args.auto_xr_combinations <= 0:
+        sys.stderr.write("xptest: --base-xr requires --auto-xr-combinations\n")
         return 1
 
     if args.auto_xr_combinations > 0:
@@ -801,7 +818,11 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
 
     progress.phase("Generating XR parameter combinations")
 
-    candidates = _generate_auto_xr_candidates(args.xrd, max_count=args.auto_xr_combinations)
+    candidates = _generate_auto_xr_candidates(
+        args.xrd,
+        max_count=args.auto_xr_combinations,
+        base_xr_paths=args.base_xr,
+    )
     if not candidates:
         sys.stderr.write("xptest: failed to auto-generate XR candidates from XRD\n")
         return 1
@@ -955,7 +976,11 @@ def _build_runtime_finding(message: str):
     )
 
 
-def _generate_auto_xr_candidates(xrd_path: str, max_count: int) -> list[tuple[str, dict]]:
+def _generate_auto_xr_candidates(
+    xrd_path: str,
+    max_count: int,
+    base_xr_paths: list[str] | None = None,
+) -> list[tuple[str, dict]]:
     with Path(xrd_path).open() as fh:
         xrd = yaml.safe_load(fh) or {}
 
@@ -974,27 +999,27 @@ def _generate_auto_xr_candidates(xrd_path: str, max_count: int) -> list[tuple[st
         .get("properties", {})
         .get("spec", {})
     )
-    props: dict = schema.get("properties", {})
-    required: list[str] = schema.get("required", list(props.keys())[:2])
 
-    fields = [f for f in required if f in props]
-    if not fields:
-        fields = list(props.keys())[:2]
+    if base_xr_paths:
+        return _generate_mutation_candidates(
+            base_xr_paths, schema, max_count,
+        )
 
-    options = [(field, _field_options(field, props.get(field, {}))) for field in fields]
-    option_values = [vals for _field, vals in options]
+    # Fallback: synthesis-based generation (original behaviour)
+    params = _extract_flat_params("", schema)
+    if not params:
+        return []
+
+    combos = _pairwise_cover_params(params, max_count)
 
     candidates: list[tuple[str, dict]] = []
-    for idx, combo in enumerate(product(*option_values) if option_values else [()]):
-        if idx >= max_count:
-            break
-        spec_values = {field: value for (field, _), value in zip(options, combo)}
+    for idx, flat_combo in enumerate(combos):
+        spec_values = _unflatten(flat_combo)
         name = f"auto-xr-{idx}"
 
-        # Extract namespace-like parameter for claim-namespace label
         claim_namespace = "default"
-        for field, value in spec_values.items():
-            if "namespace" in field.lower() and isinstance(value, str):
+        for key, value in flat_combo.items():
+            if "namespace" in key.lower() and isinstance(value, str):
                 claim_namespace = value
                 break
 
@@ -1010,16 +1035,323 @@ def _generate_auto_xr_candidates(xrd_path: str, max_count: int) -> list[tuple[st
             },
             "spec": spec_values,
         }
-        label = ",".join(f"{k}={v}" for k, v in spec_values.items()) if spec_values else "default"
+        label = ",".join(f"{k}={v}" for k, v in flat_combo.items()) if flat_combo else "default"
         candidates.append((label, xr_doc))
 
     return candidates
 
 
+def _generate_mutation_candidates(
+    base_xr_paths: list[str],
+    spec_schema: dict,
+    max_count: int,
+) -> list[tuple[str, dict]]:
+    """Generate XR candidates by mutating known-good base XRs one field at a time.
+
+    For each base XR, identify mutable fields (enums, booleans, bounded integers)
+    from the XRD schema, then produce variants by changing one field to each of its
+    other valid values. Finally, add pairwise multi-field mutations if budget remains.
+    """
+    import copy
+
+    # Load base XR documents (skip files with 'bad' in the name)
+    bases: list[tuple[str, dict]] = []
+    for path_str in base_xr_paths:
+        p = Path(path_str)
+        if "bad" in p.name.lower():
+            continue
+        try:
+            with p.open() as fh:
+                doc = yaml.safe_load(fh)
+            if isinstance(doc, dict) and "spec" in doc:
+                bases.append((p.stem, doc))
+        except Exception:
+            sys.stderr.write(f"xptest: warning — could not load base XR: {path_str}\n")
+
+    if not bases:
+        return []
+
+    # Extract mutable fields from schema
+    params = _extract_flat_params("", spec_schema)
+    if not params:
+        # No mutable fields found — return bases as-is
+        return [(name, doc) for name, doc in bases]
+
+    # For mutation-based generation, only keep fields with real domain values
+    # (enums, booleans, bounded integers). Exclude synthetic placeholders and
+    # object-type combos (dicts) which are too complex to mutate safely.
+    _synthetic = {"sample-a", "sample-b", "demo", "test-resource", "value-1"}
+    params = [
+        (path, domain) for path, domain in params
+        if not any(isinstance(v, dict) for v in domain)
+        and not all(str(v) in _synthetic for v in domain)
+    ]
+
+    candidates: list[tuple[str, dict]] = []
+
+    # Phase 1: Include each base XR as-is
+    for base_name, base_doc in bases:
+        candidates.append((f"base:{base_name}", copy.deepcopy(base_doc)))
+
+    # Phase 2: Single-field mutations from each base
+    for base_name, base_doc in bases:
+        base_spec = base_doc.get("spec", {})
+        base_flat = _flatten_spec(base_spec)
+
+        for field_path, domain in params:
+            current_val = base_flat.get(field_path)
+            for alt_val in domain:
+                if alt_val == current_val:
+                    continue
+                mutated = copy.deepcopy(base_doc)
+                _set_nested(mutated["spec"], field_path, alt_val)
+                label = f"mutate:{base_name}:{field_path}={alt_val}"
+                candidates.append((label, mutated))
+                if len(candidates) >= max_count:
+                    return candidates
+
+    # Phase 3: Pairwise two-field mutations if budget remains
+    if len(candidates) < max_count and len(params) >= 2:
+        for base_name, base_doc in bases:
+            base_spec = base_doc.get("spec", {})
+            base_flat = _flatten_spec(base_spec)
+
+            for i, (field_a, domain_a) in enumerate(params):
+                for field_b, domain_b in params[i + 1:]:
+                    cur_a = base_flat.get(field_a)
+                    cur_b = base_flat.get(field_b)
+                    for val_a in domain_a:
+                        if val_a == cur_a:
+                            continue
+                        for val_b in domain_b:
+                            if val_b == cur_b:
+                                continue
+                            mutated = copy.deepcopy(base_doc)
+                            _set_nested(mutated["spec"], field_a, val_a)
+                            _set_nested(mutated["spec"], field_b, val_b)
+                            label = f"pair:{base_name}:{field_a}={val_a},{field_b}={val_b}"
+                            candidates.append((label, mutated))
+                            if len(candidates) >= max_count:
+                                return candidates
+
+    return candidates
+
+
+def _flatten_spec(spec: dict, prefix: str = "") -> dict[str, Any]:
+    """Flatten a nested spec dict into dotted-path keys."""
+    result: dict[str, Any] = {}
+    for key, value in spec.items():
+        dotted = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            result.update(_flatten_spec(value, dotted))
+        else:
+            result[dotted] = value
+    return result
+
+
+def _set_nested(target: dict, dotted_path: str, value: Any) -> None:
+    """Set a value in a nested dict using a dotted path, creating intermediates as needed."""
+    parts = dotted_path.split(".")
+    for part in parts[:-1]:
+        if part not in target or not isinstance(target[part], dict):
+            target[part] = {}
+        target = target[part]
+    target[parts[-1]] = value
+
+
+def _extract_flat_params(
+    prefix: str, schema: dict, *, _depth: int = 0,
+) -> list[tuple[str, list]]:
+    """Recursively extract (dotted_path, domain_values) from a schema.
+
+    For object types, recurse into sub-fields instead of generating object combos.
+    Includes required fields first, then optional fields that have enums, booleans,
+    or bounded integers (i.e. fields that contribute meaningful variation).
+    """
+    props: dict = dict(schema.get("properties", {}))
+    required: list[str] = list(schema.get("required", []))
+
+    # Merge allOf / oneOf constraints
+    for constraint in schema.get("allOf", []):
+        for k, v in constraint.get("properties", {}).items():
+            if not isinstance(v, dict):
+                continue
+            if k in props and isinstance(props[k], dict):
+                # Enrich existing property with constraint keys (enum, pattern, etc.)
+                for attr in ("enum", "pattern", "minimum", "maximum"):
+                    if attr in v and attr not in props[k]:
+                        props[k][attr] = v[attr]
+            else:
+                props[k] = v
+        required.extend(constraint.get("required", []))
+    for constraint in schema.get("oneOf", []):
+        for k, v in constraint.get("properties", {}).items():
+            if not isinstance(v, dict):
+                continue
+            if k in props and isinstance(props[k], dict):
+                for attr in ("enum", "pattern", "minimum", "maximum"):
+                    if attr in v and attr not in props[k]:
+                        props[k][attr] = v[attr]
+            else:
+                props[k] = v
+        required.extend(constraint.get("required", []))
+
+    required = list(dict.fromkeys(required))
+
+    # Order: required first, then optional fields that add variation
+    ordered: list[str] = [f for f in required if f in props]
+    for name in props:
+        if name not in ordered and _has_variation(props[name]):
+            ordered.append(name)
+
+    params: list[tuple[str, list]] = []
+    for name in ordered:
+        field_schema = props[name]
+        dotted = f"{prefix}.{name}" if prefix else name
+        field_type = field_schema.get("type", "string")
+
+        if field_type == "object" and _depth < 3:
+            sub = _extract_flat_params(dotted, field_schema, _depth=_depth + 1)
+            if sub:
+                params.extend(sub)
+                continue
+
+        domain = _field_options(name, field_schema)
+        if domain:
+            params.append((dotted, domain))
+
+    return params
+
+
+def _has_variation(field_schema: dict) -> bool:
+    """Return True if a field contributes more than one value to combinations."""
+    if field_schema.get("enum"):
+        return True
+    ft = field_schema.get("type", "string")
+    if ft == "boolean":
+        return True
+    if ft == "string":
+        return True
+    if ft in {"integer", "number"} and (
+        field_schema.get("minimum") is not None or field_schema.get("maximum") is not None
+    ):
+        return True
+    if ft == "object":
+        return bool(field_schema.get("properties") or field_schema.get("allOf"))
+    return False
+
+
+def _pairwise_cover_params(
+    params: list[tuple[str, list]], max_count: int,
+) -> list[dict[str, object]]:
+    """Generate pairwise covering array. Uses allpairspy if available."""
+    if not params:
+        return []
+    names = [n for n, _ in params]
+    domains = [d for _, d in params]
+
+    # AllPairs requires >= 2 parameters; for 1 param just enumerate values
+    if len(params) < 2:
+        return [{names[0]: v} for v in domains[0][:max_count]]
+
+    try:
+        from allpairspy import AllPairs
+        combos: list[dict[str, object]] = []
+        for row in AllPairs(domains):
+            if len(combos) >= max_count:
+                break
+            combos.append(dict(zip(names, row)))
+    except ImportError:
+        combos = _greedy_pairwise(names, domains, max_count)
+
+    # Fill remaining slots with random combinations (deterministic seed)
+    if len(combos) < max_count:
+        rng = random.Random(42)
+        existing = {json.dumps(c, sort_keys=True, default=str) for c in combos}
+        attempts = 0
+        while len(combos) < max_count and attempts < max_count * 10:
+            row = {n: rng.choice(d) for n, d in zip(names, domains)}
+            key = json.dumps(row, sort_keys=True, default=str)
+            if key not in existing:
+                existing.add(key)
+                combos.append(row)
+            attempts += 1
+
+    return combos
+
+
+def _greedy_pairwise(
+    names: list[str], domains: list[list], max_count: int,
+) -> list[dict[str, object]]:
+    """Greedy pairwise fallback when allpairspy is unavailable."""
+    n = len(names)
+    if n == 0:
+        return []
+    if n == 1:
+        return [{names[0]: v} for v in domains[0][:max_count]]
+
+    # Build uncovered pair set
+    uncovered: set[tuple[int, int, int, int]] = set()
+    for i in range(n):
+        for j in range(i + 1, n):
+            for vi_idx, _ in enumerate(domains[i]):
+                for vj_idx, _ in enumerate(domains[j]):
+                    uncovered.add((i, vi_idx, j, vj_idx))
+
+    combos: list[dict[str, object]] = []
+    while uncovered and len(combos) < max_count:
+        best_row: list | None = None
+        best_score = 0
+
+        for pair in list(uncovered)[:80]:
+            i, vi_idx, j, vj_idx = pair
+            row = [d[0] for d in domains]
+            row[i] = domains[i][vi_idx]
+            row[j] = domains[j][vj_idx]
+            score = sum(
+                1 for (pi, pvi, pj, pvj) in uncovered
+                if row[pi] == domains[pi][pvi] and row[pj] == domains[pj][pvj]
+            )
+            if score > best_score:
+                best_score = score
+                best_row = row
+
+        if best_row is None:
+            break
+
+        combos.append(dict(zip(names, best_row)))
+        for i in range(n):
+            for j in range(i + 1, n):
+                for vi_idx, v in enumerate(domains[i]):
+                    if best_row[i] != v:
+                        continue
+                    for vj_idx, v2 in enumerate(domains[j]):
+                        if best_row[j] == v2:
+                            uncovered.discard((i, vi_idx, j, vj_idx))
+
+    return combos
+
+
+def _unflatten(flat: dict[str, object]) -> dict:
+    """Convert dotted-path keys back to nested dicts."""
+    result: dict = {}
+    for dotted_key, value in flat.items():
+        parts = dotted_key.split(".")
+        target = result
+        for part in parts[:-1]:
+            next_level = target.get(part)
+            if not isinstance(next_level, dict):
+                # Collision: intermediate is a leaf or missing — overwrite with dict
+                target[part] = {}
+            target = target[part]
+        target[parts[-1]] = value
+    return result
+
+
 def _field_options(field_name: str, field_schema: dict) -> list:
     enum_vals = field_schema.get("enum")
     if isinstance(enum_vals, list) and enum_vals:
-        return enum_vals[:2]
+        return enum_vals
 
     field_type = field_schema.get("type", "string")
     lower = field_name.lower()
@@ -1027,53 +1359,71 @@ def _field_options(field_name: str, field_schema: dict) -> list:
     if field_type == "boolean":
         return [True, False]
     if field_type in {"integer", "number"}:
-        return [1, 2]
+        minimum = field_schema.get("minimum", 1)
+        maximum = field_schema.get("maximum", 100)
+        values = sorted({minimum, maximum})
+        mid = (minimum + maximum) // 2
+        if mid not in values:
+            values = sorted({minimum, mid, maximum})
+        return values
     if field_type == "object":
-        # For objects, generate combinations from required fields first,
-        # otherwise from the first few declared properties.
+        # When called directly (not via _extract_flat_params), generate
+        # a few combos from sub-fields for backward compatibility.
         props = dict(field_schema.get("properties", {}))
         required = list(field_schema.get("required", []))
-
-        # Collect required fields and properties from allOf/oneOf branches
         for constraint in field_schema.get("allOf", []):
             for k, v in constraint.get("properties", {}).items():
-                props.setdefault(k, v)
+                if not isinstance(v, dict):
+                    continue
+                if k in props and isinstance(props[k], dict):
+                    for attr in ("enum", "pattern", "minimum", "maximum"):
+                        if attr in v and attr not in props[k]:
+                            props[k][attr] = v[attr]
+                else:
+                    props[k] = v
             required.extend(constraint.get("required", []))
-        for constraint in field_schema.get("oneOf", [])[:1]:
+        for constraint in field_schema.get("oneOf", []):
             for k, v in constraint.get("properties", {}).items():
-                props.setdefault(k, v)
+                if not isinstance(v, dict):
+                    continue
+                if k in props and isinstance(props[k], dict):
+                    for attr in ("enum", "pattern", "minimum", "maximum"):
+                        if attr in v and attr not in props[k]:
+                            props[k][attr] = v[attr]
+                else:
+                    props[k] = v
             required.extend(constraint.get("required", []))
-
         required = [f for f in dict.fromkeys(required) if f in props]
-        fields = required if required else list(props.keys())[:2]
+        fields = required if required else list(props.keys())[:3]
         if not fields:
             return [{}]
-
         option_sets: list[tuple[str, list]] = []
         for f in fields:
             vals = _field_options(f, props.get(f, {}))
             if vals:
                 option_sets.append((f, vals))
-
         if not option_sets:
             return [{}]
-
         combos: list[dict[str, object]] = []
         for idx, combo in enumerate(product(*(vals for _f, vals in option_sets))):
-            if idx >= 4:
+            if idx >= 8:
                 break
             obj = {field: value for (field, _vals), value in zip(option_sets, combo)}
             combos.append(obj)
-
         return combos or [{}]
     if field_type == "string":
+        # Pattern-constrained strings without enum values cannot be safely mutated
+        if field_schema.get("pattern"):
+            return []
         if "namespace" in lower or lower in {"env", "environment"}:
             return ["dev", "prod"]
+        if "region" in lower:
+            return ["us-east-1", "eu-west-1"]
         if "name" in lower:
-            return ["demo"]
-        return ["sample"]
+            return ["demo", "test-resource"]
+        return ["sample-a", "sample-b"]
     if field_type == "array":
-        return [[]]
+        return [[], ["value-1"]]
 
     return [None]
 
