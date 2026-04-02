@@ -183,7 +183,8 @@ def _build_parser() -> argparse.ArgumentParser:
     drift.add_argument(
         "--functions",
         default=None,
-        help="Path to functions.yaml for crossplane render (required for go-templating compositions).",
+        help="Path to functions.yaml for crossplane render"
+        " (required for go-templating compositions).",
     )
     drift.add_argument(
         "--output",
