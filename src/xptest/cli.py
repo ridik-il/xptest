@@ -1002,7 +1002,9 @@ def _generate_auto_xr_candidates(
 
     if base_xr_paths:
         return _generate_mutation_candidates(
-            base_xr_paths, schema, max_count,
+            base_xr_paths,
+            schema,
+            max_count,
         )
 
     # Fallback: synthesis-based generation (original behaviour)
@@ -1082,7 +1084,8 @@ def _generate_mutation_candidates(
     # object-type combos (dicts) which are too complex to mutate safely.
     _synthetic = {"sample-a", "sample-b", "demo", "test-resource", "value-1"}
     params = [
-        (path, domain) for path, domain in params
+        (path, domain)
+        for path, domain in params
         if not any(isinstance(v, dict) for v in domain)
         and not all(str(v) in _synthetic for v in domain)
     ]
@@ -1117,7 +1120,7 @@ def _generate_mutation_candidates(
             base_flat = _flatten_spec(base_spec)
 
             for i, (field_a, domain_a) in enumerate(params):
-                for field_b, domain_b in params[i + 1:]:
+                for field_b, domain_b in params[i + 1 :]:
                     cur_a = base_flat.get(field_a)
                     cur_b = base_flat.get(field_b)
                     for val_a in domain_a:
@@ -1160,7 +1163,10 @@ def _set_nested(target: dict, dotted_path: str, value: Any) -> None:
 
 
 def _extract_flat_params(
-    prefix: str, schema: dict, *, _depth: int = 0,
+    prefix: str,
+    schema: dict,
+    *,
+    _depth: int = 0,
 ) -> list[tuple[str, list]]:
     """Recursively extract (dotted_path, domain_values) from a schema.
 
@@ -1242,7 +1248,8 @@ def _has_variation(field_schema: dict) -> bool:
 
 
 def _pairwise_cover_params(
-    params: list[tuple[str, list]], max_count: int,
+    params: list[tuple[str, list]],
+    max_count: int,
 ) -> list[dict[str, object]]:
     """Generate pairwise covering array. Uses allpairspy if available."""
     if not params:
@@ -1256,6 +1263,7 @@ def _pairwise_cover_params(
 
     try:
         from allpairspy import AllPairs
+
         combos: list[dict[str, object]] = []
         for row in AllPairs(domains):
             if len(combos) >= max_count:
@@ -1281,7 +1289,9 @@ def _pairwise_cover_params(
 
 
 def _greedy_pairwise(
-    names: list[str], domains: list[list], max_count: int,
+    names: list[str],
+    domains: list[list],
+    max_count: int,
 ) -> list[dict[str, object]]:
     """Greedy pairwise fallback when allpairspy is unavailable."""
     n = len(names)
@@ -1309,7 +1319,8 @@ def _greedy_pairwise(
             row[i] = domains[i][vi_idx]
             row[j] = domains[j][vj_idx]
             score = sum(
-                1 for (pi, pvi, pj, pvj) in uncovered
+                1
+                for (pi, pvi, pj, pvj) in uncovered
                 if row[pi] == domains[pi][pvi] and row[pj] == domains[pj][pvj]
             )
             if score > best_score:

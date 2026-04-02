@@ -112,9 +112,7 @@ def find_nearby_diff_heuristics(
 
         if pair.distance <= 1 and (len(removed) + len(added)) >= 3:
             changed_field = (
-                _find_changed_field(a.input_flat, b.input_flat)
-                if pair.distance == 1
-                else None
+                _find_changed_field(a.input_flat, b.input_flat) if pair.distance == 1 else None
             )
             high_impact = changed_field is not None and _is_high_impact_field(changed_field)
             severity = Severity.WARNING if high_impact else Severity.CRITICAL
@@ -164,14 +162,30 @@ def find_nearby_diff_heuristics(
     return findings
 
 
-_HIGH_IMPACT_EXACT = frozenset({
-    "engine", "provider", "platform", "runtime", "architecture",
-})
+_HIGH_IMPACT_EXACT = frozenset(
+    {
+        "engine",
+        "provider",
+        "platform",
+        "runtime",
+        "architecture",
+    }
+)
 
-_HIGH_IMPACT_SUFFIXES = frozenset({
-    "engine", "type", "kind", "mode", "tier", "family",
-    "version", "provider", "platform", "class",
-})
+_HIGH_IMPACT_SUFFIXES = frozenset(
+    {
+        "engine",
+        "type",
+        "kind",
+        "mode",
+        "tier",
+        "family",
+        "version",
+        "provider",
+        "platform",
+        "class",
+    }
+)
 
 
 def _is_high_impact_field(field_name: str) -> bool:
@@ -190,7 +204,8 @@ def _is_high_impact_field(field_name: str) -> bool:
 
 
 def _find_changed_field(
-    a_flat: dict[str, Any], b_flat: dict[str, Any],
+    a_flat: dict[str, Any],
+    b_flat: dict[str, Any],
 ) -> str | None:
     """Return the single key that differs between two input_flat dicts, or None."""
     all_keys = a_flat.keys() | b_flat.keys()
