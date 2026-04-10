@@ -392,6 +392,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         return 1
 
     if args.auto_xr_combinations > 0:
+        if not args.base_xr:
+            discovered = _discover_base_xrs(args.composition)
+            if discovered:
+                args.base_xr = discovered
         return _cmd_validate_auto_xr(args, cfg)
 
     # Merge CLI environment-configs with config file ones
@@ -1023,6 +1027,29 @@ def _build_runtime_finding(message: str):
         message=message,
         remediation="Adjust XRD defaults/options or provide an explicit --xr input.",
     )
+
+
+def _discover_base_xrs(composition_path: str) -> list[str]:
+    """Discover existing composition-test XR files for a given composition path."""
+    comp = Path(composition_path).resolve()
+    parts = comp.parts
+    try:
+        pkg_idx = parts.index("pkg")
+    except ValueError:
+        return []
+    repo_root = Path(*parts[:pkg_idx]) if pkg_idx > 1 else Path(parts[0])
+    relative = Path(*parts[pkg_idx + 1 :]).parent  # e.g. community/ec2-instance
+    resources_dir = repo_root / "composition-tests" / relative / "resources"
+    if not resources_dir.is_dir():
+        return []
+    found = sorted(
+        str(p) for p in resources_dir.glob("xr-*.yaml") if "bad" not in p.name
+    )
+    if found:
+        sys.stderr.write(
+            f"xptest: auto-discovered {len(found)} base XR(s) from composition-tests\n"
+        )
+    return found
 
 
 def _generate_auto_xr_candidates(
