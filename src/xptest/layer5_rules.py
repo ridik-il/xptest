@@ -32,12 +32,30 @@ _SECURITY_KINDS = {"SecurityGroup", "SecurityGroupRule", "Role", "RolePolicy", "
 
 
 def _parse_envconfig_data(envconfig_paths: list[str]) -> dict[str, Any]:
-    """Merge data fields from all EnvironmentConfig docs across paths."""
+    """Merge data fields from all EnvironmentConfig docs across paths.
+
+    Deep-merges crossplane.providers so that configRefs from all documents
+    (main + tenant-specific) are preserved.
+    """
     merged: dict[str, Any] = {}
     for path in envconfig_paths:
         for doc in yaml.safe_load_all(Path(path).read_text()):
-            if isinstance(doc, dict) and doc.get("kind") == "EnvironmentConfig":
-                merged.update(doc.get("data", {}))
+            if not isinstance(doc, dict) or doc.get("kind") != "EnvironmentConfig":
+                continue
+            data = doc.get("data", {})
+            # Deep-merge crossplane.providers to avoid overwriting
+            incoming_cp = data.get("crossplane", {})
+            if isinstance(incoming_cp, dict) and "crossplane" in merged:
+                existing_cp = merged["crossplane"]
+                if isinstance(existing_cp, dict):
+                    incoming_provs = incoming_cp.get("providers", {})
+                    existing_provs = existing_cp.get("providers", {})
+                    if isinstance(incoming_provs, dict) and isinstance(existing_provs, dict):
+                        existing_provs.update(incoming_provs)
+                        incoming_cp["providers"] = existing_provs
+                    existing_cp.update(incoming_cp)
+                    data["crossplane"] = existing_cp
+            merged.update(data)
     return merged
 
 
@@ -248,22 +266,33 @@ def check_sg_reachability(
         if not ingress_nets:
             continue
 
+        # Detect addDefaultIPRanges: true — prefix lists can't be resolved statically
+        has_default_ip_ranges = any(
+            rule.get("addDefaultIPRanges") is True for rule in ingress_rules
+        )
+
         # Check coverage: each subnet CIDR should be contained by at least one ingress CIDR
         for subnet in all_subnet_cidrs:
             covered = any(subnet.subnet_of(ingress) for ingress in ingress_nets)
             if not covered:
                 subnet_type = "non-routable" if subnet in nr_cidrs else "routable"
+                if has_default_ip_ranges:
+                    severity = Severity.WARNING
+                    note = " (addDefaultIPRanges is true — prefix lists may cover this gap)"
+                else:
+                    severity = Severity.CRITICAL
+                    note = ""
                 findings.append(
                     Finding(
                         layer=_LAYER,
                         rule="L6-NET-01",
                         resource=resource_name,
                         path=ingress_path,
-                        severity=Severity.CRITICAL,
+                        severity=severity,
                         message=(
                             f"SecurityGroup ingress does not cover {subnet_type} "
                             f"subnet {subnet}. Ingress CIDRs: "
-                            f"{[str(n) for n in ingress_nets]}"
+                            f"{[str(n) for n in ingress_nets]}{note}"
                         ),
                         remediation=(
                             f"Add {subnet} (or a supernet) to the SecurityGroup ingress rules "
@@ -449,12 +478,16 @@ _DEFAULT_MANDATORY_TAGS = ["claim-name", "created-by"]
 def check_tag_propagation(
     rendered_resources: list[dict],
     mandatory_keys: list[str] | None = None,
+    exempt_kinds: list[str] | None = None,
 ) -> list[Finding]:
     """Verify mandatory tags are present on every AWS resource with forProvider."""
     findings: list[Finding] = []
     keys = mandatory_keys or _DEFAULT_MANDATORY_TAGS
+    skip_kinds = set(exempt_kinds) if exempt_kinds else set()
 
     for res in rendered_resources:
+        if res.get("kind", "") in skip_kinds:
+            continue
         fp = res.get("spec", {}).get("forProvider")
         if fp is None:
             continue
@@ -498,9 +531,13 @@ def check_tag_propagation(
 def check_cross_composition(
     rendered_resources: list[dict],
     env_config_data: dict,
+    known_patterns: list[str] | None = None,
 ) -> list[Finding]:
     """Check that providerConfigRef names match known patterns from envconfig."""
+    from fnmatch import fnmatch
+
     findings: list[Finding] = []
+    patterns = known_patterns or []
 
     # Build set of known provider config names from envconfig
     known_configs: set[str] = set()
@@ -517,6 +554,17 @@ def check_cross_composition(
     if not known_configs:
         return findings
 
+    def _matches(name: str) -> bool:
+        if name in known_configs:
+            return True
+        # Pattern match: e.g. providerconfig-aws-demo matches providerconfig-aws*
+        for pat in patterns:
+            if fnmatch(name, pat):
+                # Also check that at least one known config matches the same pattern
+                if any(fnmatch(k, pat) for k in known_configs):
+                    return True
+        return False
+
     for res in rendered_resources:
         resource_name = _resource_key(res)
         spec = res.get("spec", {})
@@ -527,7 +575,7 @@ def check_cross_composition(
         if not pcr_name:
             continue
 
-        if pcr_name not in known_configs:
+        if not _matches(pcr_name):
             findings.append(
                 Finding(
                     layer=_LAYER,

@@ -471,7 +471,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if getattr(args, "extended_checks", False) or getattr(args, "env_matrix", False):
         if args.render_mode != "offline" and args.xr and args.functions:
             xr_doc = yaml.safe_load(Path(args.xr).read_text())
-            findings.extend(_run_extended_checks(args, xr_doc, env_config_paths, obj.resources))
+            findings.extend(
+                _run_extended_checks(args, xr_doc, env_config_paths, obj.resources, cfg=cfg)
+            )
 
     if not args.logic_test:
         findings = _apply_baseline_hooks(findings, args, obj.composition_name)
@@ -1035,7 +1037,7 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
     if getattr(args, "extended_checks", False) or getattr(args, "env_matrix", False):
         if args.render_mode != "offline" and candidates:
             first_xr_doc = candidates[0][1]
-            all_findings.extend(_run_extended_checks(args, first_xr_doc, env_config_paths))
+            all_findings.extend(_run_extended_checks(args, first_xr_doc, env_config_paths, cfg=cfg))
 
     if not args.logic_test:
         comp_name = comp_doc.get("metadata", {}).get("name", "")
@@ -1063,6 +1065,7 @@ def _run_extended_checks(
     xr_doc: dict,
     env_config_paths: list[str],
     rendered_resource_objects: list | None = None,
+    cfg: Any | None = None,
 ) -> list[Finding]:
     """Run Layer 6 extended checks and return findings."""
     from xptest.layer5_rules import (
@@ -1079,6 +1082,10 @@ def _run_extended_checks(
     findings: list[Finding] = []
     extended = getattr(args, "extended_checks", False)
     env_matrix = getattr(args, "env_matrix", False)
+
+    tag_exempt_kinds = cfg.tag_exempt_kinds if cfg else []
+    tag_keys = cfg.mandatory_tag_keys if cfg and cfg.mandatory_tag_keys else None
+    provider_patterns = cfg.known_provider_config_patterns if cfg else []
 
     # Discover envconfig files for --env-matrix
     all_envconfig_paths = list(env_config_paths)
@@ -1103,19 +1110,20 @@ def _run_extended_checks(
         env_data: dict = {}
         if env_config_paths:
             try:
-                env_data = _parse_envconfig_data(env_config_paths[:1])
+                env_data = _parse_envconfig_data(env_config_paths)
             except Exception:
                 pass
 
         if env_data:
-            findings.extend(check_cross_composition(rendered_dicts, env_data))
+            findings.extend(check_cross_composition(rendered_dicts, env_data, provider_patterns))
             if not env_matrix:
                 findings.extend(check_sg_reachability(rendered_dicts, env_data))
         findings.extend(check_deletion_policy(rendered_dicts, xr_doc))
-        findings.extend(check_tag_propagation(rendered_dicts))
+        findings.extend(check_tag_propagation(rendered_dicts, tag_keys, tag_exempt_kinds))
 
-    # SG reachability per-envconfig: render with each envconfig and check
+    # SG reachability per-envconfig with deduplication
     if env_matrix and args.functions and all_envconfig_paths:
+        seen_sg: set[str] = set()
         for ec_path in all_envconfig_paths:
             try:
                 ec_data = _parse_envconfig_data([ec_path])
@@ -1125,7 +1133,11 @@ def _run_extended_checks(
             except Exception:
                 continue
             if ec_data:
-                findings.extend(check_sg_reachability(ec_docs, ec_data))
+                for f in check_sg_reachability(ec_docs, ec_data):
+                    dedup_key = f"{f.resource}|{f.rule}|{Path(ec_path).stem}"
+                    if dedup_key not in seen_sg:
+                        seen_sg.add(dedup_key)
+                        findings.append(f)
 
     # Checks 1, 3 — do their own rendering
     if args.functions:

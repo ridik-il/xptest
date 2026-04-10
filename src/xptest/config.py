@@ -34,6 +34,12 @@ class Config:
     environment_config_paths: list[str] = field(default_factory=list)
     severity_overrides: dict[str, str] = field(default_factory=dict)
     mandatory_tag_keys: list[str] = field(default_factory=list)
+    tag_exempt_kinds: list[str] = field(
+        default_factory=lambda: ["DBClusterParameterGroup", "DBParameterGroup"]
+    )
+    known_provider_config_patterns: list[str] = field(
+        default_factory=lambda: ["providerconfig-aws*"]
+    )
     # Drift detection (Stage 3)
     aws_region: str = ""
     drift_resource_filter: list[str] = field(default_factory=list)
@@ -82,6 +88,12 @@ def load_config(config_path: str | None) -> Config:
         ],
         severity_overrides=severity_overrides,
         mandatory_tag_keys=raw.get("mandatory_tag_keys", []),
+        tag_exempt_kinds=raw.get(
+            "tag_exempt_kinds", ["DBClusterParameterGroup", "DBParameterGroup"]
+        ),
+        known_provider_config_patterns=raw.get(
+            "known_provider_config_patterns", ["providerconfig-aws*"]
+        ),
         aws_region=raw.get("aws_region", ""),
         drift_resource_filter=raw.get("drift_resource_filter", []),
         baseline_path=_resolve_path(raw.get("baseline_path", ""), base_dir),
