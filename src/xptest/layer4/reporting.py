@@ -11,9 +11,12 @@ Finding schema (from framework-design.md §3.4):
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sys
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
@@ -179,10 +182,6 @@ def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO
 # ---------------------------------------------------------------------------
 # Baseline / suppression helpers
 # ---------------------------------------------------------------------------
-
-import hashlib
-import re
-from datetime import datetime, timezone
 
 _BRACKET_PREFIX_RE = re.compile(r"^\[.*?\]\s*")
 

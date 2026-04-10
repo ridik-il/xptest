@@ -192,7 +192,10 @@ def _build_parser() -> argparse.ArgumentParser:
     val.add_argument(
         "--baseline",
         default=None,
-        help="Path to baseline JSON for finding suppression (default: .xptest-baseline.json if it exists).",
+        help=(
+            "Path to baseline JSON for finding suppression"
+            " (default: .xptest-baseline.json if it exists)."
+        ),
     )
     val.set_defaults(func=_cmd_validate)
 
@@ -1092,6 +1095,70 @@ def _discover_base_xrs(composition_path: str) -> list[str]:
     return found
 
 
+def _extract_oneof_constraints(
+    schema: dict,
+    prefix: str = "",
+) -> list[dict[str, list]]:
+    """Extract oneOf enum constraints as a list of branch mappings.
+
+    Each branch mapping is ``{dotted_field_path: [allowed_values]}``.
+    Only scalar enum fields are tracked; array-of-object fields are skipped.
+    """
+    constraints: list[dict[str, list]] = []
+
+    one_of = schema.get("oneOf", [])
+    if one_of:
+        for branch in one_of:
+            mapping: dict[str, list] = {}
+            _collect_branch_enums(branch, prefix, mapping)
+            if mapping:
+                constraints.append(mapping)
+
+    # Recurse into nested properties to find deeper oneOf blocks
+    for name, prop in schema.get("properties", {}).items():
+        if not isinstance(prop, dict):
+            continue
+        child_prefix = f"{prefix}.{name}" if prefix else name
+        if prop.get("type", "object") == "object" or prop.get("properties"):
+            constraints.extend(
+                _extract_oneof_constraints(prop, child_prefix)
+            )
+
+    return constraints
+
+
+def _collect_branch_enums(
+    branch: dict, prefix: str, mapping: dict[str, list]
+) -> None:
+    """Walk a oneOf branch and collect enum constraints into *mapping*."""
+    for name, prop in branch.get("properties", {}).items():
+        if not isinstance(prop, dict):
+            continue
+        dotted = f"{prefix}.{name}" if prefix else name
+        if "enum" in prop:
+            mapping[dotted] = prop["enum"]
+        elif prop.get("properties"):
+            _collect_branch_enums(prop, dotted, mapping)
+
+
+def _combo_satisfies_oneof(
+    combo: dict[str, object],
+    constraints: list[dict[str, list]],
+) -> bool:
+    """Return True if *combo* is consistent with at least one branch per oneOf group."""
+    if not constraints:
+        return True
+    for branch in constraints:
+        match = True
+        for field, allowed in branch.items():
+            if field in combo and combo[field] not in allowed:
+                match = False
+                break
+        if match:
+            return True
+    return False
+
+
 def _generate_auto_xr_candidates(
     xrd_path: str,
     max_count: int,
@@ -1129,6 +1196,13 @@ def _generate_auto_xr_candidates(
         return []
 
     combos = _pairwise_cover_params(params, max_count)
+
+    oneof_constraints = _extract_oneof_constraints(schema)
+    if oneof_constraints:
+        combos = [
+            c for c in combos
+            if _combo_satisfies_oneof(c, oneof_constraints)
+        ]
 
     candidates: list[tuple[str, dict]] = []
     for idx, flat_combo in enumerate(combos):
@@ -1207,6 +1281,7 @@ def _generate_mutation_candidates(
     ]
 
     candidates: list[tuple[str, dict]] = []
+    oneof_constraints = _extract_oneof_constraints(spec_schema)
 
     # Phase 1: Include each base XR as-is
     for base_name, base_doc in bases:
@@ -1221,6 +1296,11 @@ def _generate_mutation_candidates(
             current_val = base_flat.get(field_path)
             for alt_val in domain:
                 if alt_val == current_val:
+                    continue
+                mut_flat = {**base_flat, field_path: alt_val}
+                if not _combo_satisfies_oneof(
+                    mut_flat, oneof_constraints
+                ):
                     continue
                 mutated = copy.deepcopy(base_doc)
                 _set_nested(mutated["spec"], field_path, alt_val)
@@ -1244,6 +1324,15 @@ def _generate_mutation_candidates(
                             continue
                         for val_b in domain_b:
                             if val_b == cur_b:
+                                continue
+                            mut_flat = {
+                                **base_flat,
+                                field_a: val_a,
+                                field_b: val_b,
+                            }
+                            if not _combo_satisfies_oneof(
+                                mut_flat, oneof_constraints
+                            ):
                                 continue
                             mutated = copy.deepcopy(base_doc)
                             _set_nested(mutated["spec"], field_a, val_a)
