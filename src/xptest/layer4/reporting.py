@@ -198,9 +198,7 @@ def _finding_fingerprint(f: Finding) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
-def filter_baseline(
-    findings: list[Finding], baseline_path: str
-) -> tuple[list[Finding], int]:
+def filter_baseline(findings: list[Finding], baseline_path: str) -> tuple[list[Finding], int]:
     """Remove findings whose fingerprints appear in the baseline file.
 
     Returns (new_findings, suppressed_count).
@@ -215,9 +213,7 @@ def filter_baseline(
     return new, len(findings) - len(new)
 
 
-def save_baseline(
-    findings: list[Finding], baseline_path: str, composition_name: str = ""
-) -> None:
+def save_baseline(findings: list[Finding], baseline_path: str, composition_name: str = "") -> None:
     """Persist current findings as a baseline JSON file."""
     now = datetime.now(timezone.utc).isoformat()
     fingerprints: dict[str, dict] = {}
@@ -237,6 +233,4 @@ def save_baseline(
     }
     p = Path(baseline_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    p.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

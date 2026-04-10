@@ -197,6 +197,16 @@ def _build_parser() -> argparse.ArgumentParser:
             " (default: .xptest-baseline.json if it exists)."
         ),
     )
+    val.add_argument(
+        "--extended-checks",
+        action="store_true",
+        help="Run Layer 6 extended checks (env matrix, SG reachability, multi-render, etc.).",
+    )
+    val.add_argument(
+        "--env-matrix",
+        action="store_true",
+        help="Auto-discover envconfig*.yaml files and run environment coverage matrix check.",
+    )
     val.set_defaults(func=_cmd_validate)
 
     # --- drift ---
@@ -456,6 +466,13 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         return 1
 
     findings = _run_layers(obj, cfg, halt_on_critical=args.halt_on_critical)
+
+    # Extended checks (Layer 6)
+    if getattr(args, "extended_checks", False) or getattr(args, "env_matrix", False):
+        if args.render_mode != "offline" and args.xr and args.functions:
+            xr_doc = yaml.safe_load(Path(args.xr).read_text())
+            findings.extend(_run_extended_checks(args, xr_doc, env_config_paths, obj.resources))
+
     if not args.logic_test:
         findings = _apply_baseline_hooks(findings, args, obj.composition_name)
         return layer4.write(findings, output_path=args.output)
@@ -1014,6 +1031,12 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
         f"Render+validate: render={timings['render']:.1f}s validate={timings['validate']:.1f}s"
     )
 
+    # Extended checks (Layer 6)
+    if getattr(args, "extended_checks", False) or getattr(args, "env_matrix", False):
+        if args.render_mode != "offline" and candidates:
+            first_xr_doc = candidates[0][1]
+            all_findings.extend(_run_extended_checks(args, first_xr_doc, env_config_paths))
+
     if not args.logic_test:
         comp_name = comp_doc.get("metadata", {}).get("name", "")
         all_findings = _apply_baseline_hooks(all_findings, args, comp_name)
@@ -1033,6 +1056,93 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
     sections["critical_count"] = sum(1 for f in all_findings if f.severity == Severity.CRITICAL)
     sections["timings"] = timings
     return layer4.write_extended(all_findings, output_path=args.output, extra_sections=sections)
+
+
+def _run_extended_checks(
+    args: argparse.Namespace,
+    xr_doc: dict,
+    env_config_paths: list[str],
+    rendered_resource_objects: list | None = None,
+) -> list[Finding]:
+    """Run Layer 6 extended checks and return findings."""
+    from xptest.layer5_rules import (
+        _parse_envconfig_data,
+        _render_to_docs,
+        check_cross_composition,
+        check_deletion_policy,
+        check_env_matrix,
+        check_multi_render,
+        check_sg_reachability,
+        check_tag_propagation,
+    )
+
+    findings: list[Finding] = []
+    extended = getattr(args, "extended_checks", False)
+    env_matrix = getattr(args, "env_matrix", False)
+
+    # Discover envconfig files for --env-matrix
+    all_envconfig_paths = list(env_config_paths)
+    if env_matrix and env_config_paths:
+        base_dir = Path(env_config_paths[0]).parent
+        discovered = sorted(str(p) for p in base_dir.glob("envconfig*.yaml"))
+        for p in discovered:
+            if p not in all_envconfig_paths:
+                all_envconfig_paths.append(p)
+
+    # Get rendered resources as raw dicts for resource-level checks
+    rendered_dicts: list[dict] = []
+    if extended and args.functions:
+        try:
+            rendered_dicts = _render_to_docs(
+                args.composition, args.xrd, args.functions, xr_doc, env_config_paths
+            )
+        except Exception:
+            pass
+
+    if extended and rendered_dicts:
+        env_data: dict = {}
+        if env_config_paths:
+            try:
+                env_data = _parse_envconfig_data(env_config_paths[:1])
+            except Exception:
+                pass
+
+        if env_data:
+            findings.extend(check_cross_composition(rendered_dicts, env_data))
+            if not env_matrix:
+                findings.extend(check_sg_reachability(rendered_dicts, env_data))
+        findings.extend(check_deletion_policy(rendered_dicts, xr_doc))
+        findings.extend(check_tag_propagation(rendered_dicts))
+
+    # SG reachability per-envconfig: render with each envconfig and check
+    if env_matrix and args.functions and all_envconfig_paths:
+        for ec_path in all_envconfig_paths:
+            try:
+                ec_data = _parse_envconfig_data([ec_path])
+                ec_docs = _render_to_docs(
+                    args.composition, args.xrd, args.functions, xr_doc, [ec_path]
+                )
+            except Exception:
+                continue
+            if ec_data:
+                findings.extend(check_sg_reachability(ec_docs, ec_data))
+
+    # Checks 1, 3 — do their own rendering
+    if args.functions:
+        if (env_matrix or extended) and len(all_envconfig_paths) >= 2:
+            findings.extend(
+                check_env_matrix(
+                    args.composition, args.xrd, args.functions, xr_doc, all_envconfig_paths
+                )
+            )
+        if extended:
+            findings.extend(
+                check_multi_render(
+                    args.composition, args.xrd, args.functions, xr_doc, env_config_paths
+                )
+            )
+
+    return findings
 
 
 def _run_layers(obj, cfg, halt_on_critical: bool, crd_cache=None) -> list:
@@ -1085,9 +1195,7 @@ def _discover_base_xrs(composition_path: str) -> list[str]:
     resources_dir = repo_root / "composition-tests" / relative / "resources"
     if not resources_dir.is_dir():
         return []
-    found = sorted(
-        str(p) for p in resources_dir.glob("xr-*.yaml") if "bad" not in p.name
-    )
+    found = sorted(str(p) for p in resources_dir.glob("xr-*.yaml") if "bad" not in p.name)
     if found:
         sys.stderr.write(
             f"xptest: auto-discovered {len(found)} base XR(s) from composition-tests\n"
@@ -1120,16 +1228,12 @@ def _extract_oneof_constraints(
             continue
         child_prefix = f"{prefix}.{name}" if prefix else name
         if prop.get("type", "object") == "object" or prop.get("properties"):
-            constraints.extend(
-                _extract_oneof_constraints(prop, child_prefix)
-            )
+            constraints.extend(_extract_oneof_constraints(prop, child_prefix))
 
     return constraints
 
 
-def _collect_branch_enums(
-    branch: dict, prefix: str, mapping: dict[str, list]
-) -> None:
+def _collect_branch_enums(branch: dict, prefix: str, mapping: dict[str, list]) -> None:
     """Walk a oneOf branch and collect enum constraints into *mapping*."""
     for name, prop in branch.get("properties", {}).items():
         if not isinstance(prop, dict):
@@ -1199,10 +1303,7 @@ def _generate_auto_xr_candidates(
 
     oneof_constraints = _extract_oneof_constraints(schema)
     if oneof_constraints:
-        combos = [
-            c for c in combos
-            if _combo_satisfies_oneof(c, oneof_constraints)
-        ]
+        combos = [c for c in combos if _combo_satisfies_oneof(c, oneof_constraints)]
 
     candidates: list[tuple[str, dict]] = []
     for idx, flat_combo in enumerate(combos):
@@ -1298,9 +1399,7 @@ def _generate_mutation_candidates(
                 if alt_val == current_val:
                     continue
                 mut_flat = {**base_flat, field_path: alt_val}
-                if not _combo_satisfies_oneof(
-                    mut_flat, oneof_constraints
-                ):
+                if not _combo_satisfies_oneof(mut_flat, oneof_constraints):
                     continue
                 mutated = copy.deepcopy(base_doc)
                 _set_nested(mutated["spec"], field_path, alt_val)
@@ -1330,9 +1429,7 @@ def _generate_mutation_candidates(
                                 field_a: val_a,
                                 field_b: val_b,
                             }
-                            if not _combo_satisfies_oneof(
-                                mut_flat, oneof_constraints
-                            ):
+                            if not _combo_satisfies_oneof(mut_flat, oneof_constraints):
                                 continue
                             mutated = copy.deepcopy(base_doc)
                             _set_nested(mutated["spec"], field_a, val_a)
