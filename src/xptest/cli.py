@@ -1271,6 +1271,12 @@ def _extract_flat_params(
                 params.extend(sub)
                 continue
 
+        if field_type == "array" and field_schema.get("items", {}).get("type") == "object":
+            domain = _field_options(name, field_schema)
+            if domain:
+                params.append((dotted, domain))
+            continue
+
         domain = _field_options(name, field_schema)
         if domain:
             params.append((dotted, domain))
@@ -1483,6 +1489,15 @@ def _field_options(field_name: str, field_schema: dict) -> list:
             return ["demo", "test-resource"]
         return ["sample-a", "sample-b"]
     if field_type == "array":
+        items = field_schema.get("items", {})
+        if items.get("type") == "object":
+            obj_variants = _field_options(field_name, items)
+            if obj_variants and isinstance(obj_variants[0], dict):
+                result = [[]]
+                result.append([obj_variants[0]])
+                if len(obj_variants) > 1:
+                    result.append([obj_variants[0], obj_variants[1]])
+                return result
         return [[], ["value-1"]]
 
     return [None]

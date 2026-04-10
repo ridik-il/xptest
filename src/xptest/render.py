@@ -60,7 +60,7 @@ def crossplane_cli_available() -> bool:
     """Return True if the crossplane CLI is on PATH."""
     try:
         result = subprocess.run(
-            ["crossplane", "version"],
+            ["crossplane", "version", "--client"],
             capture_output=True,
             text=True,
             timeout=10,
