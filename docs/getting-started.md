@@ -136,6 +136,35 @@ xptest validate \
 
 This calls `crossplane render` under the hood and validates the rendered output. Requires Crossplane CLI and Docker.
 
+### Extended checks and baseline
+
+```bash
+# Extended checks with environment matrix
+xptest validate \
+  --composition compositions/my-rds.yaml \
+  --xrd definitions/xrdsaurora.yaml \
+  --functions functions.yaml \
+  --environment-configs envconfig.yaml \
+  --auto-xr-combinations 20 \
+  --extended-checks \
+  --env-matrix
+
+# Save baseline to suppress known findings
+xptest validate \
+  --composition compositions/my-rds.yaml \
+  --xrd definitions/xrdsaurora.yaml \
+  --functions functions.yaml \
+  --auto-xr-combinations 20 \
+  --save-baseline
+
+# Subsequent runs only show NEW findings
+xptest validate \
+  --composition compositions/my-rds.yaml \
+  --xrd definitions/xrdsaurora.yaml \
+  --functions functions.yaml \
+  --auto-xr-combinations 20
+```
+
 ## Read the output
 
 Findings are written to `findings.json` (or the path given with `--output`):

@@ -71,6 +71,21 @@ mandatory_tag_keys:
   - Owner
   - CostCenter
 
+# ─── Extended Checks (Layer 6) ────────────────────────────────
+
+# Resource kinds exempt from tag propagation checks.
+# These kinds are skipped by L6-TAG-01.
+# Default: ["DBClusterParameterGroup", "DBParameterGroup"]
+tag_exempt_kinds:
+  - DBClusterParameterGroup
+  - DBParameterGroup
+
+# Glob patterns for known provider config names.
+# Used by L6-XCC-01 to avoid false positives on variant names.
+# Default: ["providerconfig-aws*"]
+known_provider_config_patterns:
+  - "providerconfig-aws*"
+
 # ─── Drift Detection (Stage 3) ───────────────────────────────
 
 # AWS region for drift detection API calls.
@@ -118,6 +133,8 @@ coverage_threshold: 80.0
 | `environment_config_paths` | list[string] | `[]` | Loader (render) |
 | `severity_overrides` | dict[string, string] | `{}` | Layer 3, Layer 4 |
 | `mandatory_tag_keys` | list[string] | `[]` | Layer 3 (`tag/mandatory-keys`) |
+| `tag_exempt_kinds` | list[string] | `["DBClusterParameterGroup", "DBParameterGroup"]` | Layer 6 (`L6-TAG-01`) |
+| `known_provider_config_patterns` | list[string] | `["providerconfig-aws*"]` | Layer 6 (`L6-XCC-01`) |
 | `aws_region` | string | `""` | Drift detection |
 | `drift_resource_filter` | list[string] | `[]` | Drift detection |
 | `baseline_path` | string | `""` | Exploration |

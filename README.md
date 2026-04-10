@@ -57,6 +57,14 @@ Composition YAML + XRD
    - Fault injection via observed-state mutation
    - Resource preservation invariants
    - Go template branch coverage
+        |
+  Layer 6: Extended Checks (optional, --extended-checks)
+   - EnvironmentConfig coverage matrix
+   - Security group network reachability
+   - Multi-render-cycle simulation
+   - Deletion policy consistency
+   - Tag propagation validation
+   - Cross-composition dependency validation
 ```
 
 ## Requirements
@@ -197,7 +205,7 @@ Options:
   --xr PATH                   XR/claim YAML for crossplane render
   --functions PATH             functions.yaml for crossplane render
   --observed-resources PATH    Observed resources YAML for conditional logic
-  --auto-xr-combinations N    Auto-generate N input combinations from XRD
+  --auto-xr-combinations N    Auto-generate N input combinations from XRD (auto-discovers base XRs from composition-tests)
   --logic-test                 Run offline logic testing (snapshots, coverage, heuristics)
   --auto-perturb               Run perturbation analysis (implies --logic-test)
   --nearby-distance N          Max input distance for diff comparisons (default: 1)
@@ -206,6 +214,10 @@ Options:
   --config PATH                Config file (default: ./xptest.yaml)
   --output PATH                Output JSON (default: findings.json)
   --halt-on-critical           Stop on first CRITICAL finding (default: true)
+  --extended-checks            Run Layer 6 extended validation checks
+  --env-matrix                 Auto-discover envconfig files and validate across all environments
+  --save-baseline              Save current findings as suppression baseline (.xptest-baseline.json)
+  --baseline PATH              Path to baseline file for finding suppression
 ```
 
 ### `xptest drift`
@@ -242,6 +254,46 @@ Options:
   --config PATH                Config file
   --output PATH                Output JSON (default: exploration-report.json)
 ```
+
+## Baseline / Suppression
+
+xptest supports a baseline workflow to suppress known findings and only surface new issues:
+
+1. Run with `--save-baseline` to capture current findings into `.xptest-baseline.json`
+2. Commit `.xptest-baseline.json` to your repository
+3. Subsequent runs auto-detect the baseline file and only report NEW findings
+4. Exit code is `0` when all findings are suppressed by the baseline
+
+```bash
+# Save baseline
+xptest validate \
+  --composition compositions/my-vpc.yaml \
+  --xrd definitions/xvpcnetwork.yaml \
+  --functions functions.yaml \
+  --save-baseline
+
+# Later runs only show new findings
+xptest validate \
+  --composition compositions/my-vpc.yaml \
+  --xrd definitions/xvpcnetwork.yaml \
+  --functions functions.yaml \
+  --baseline .xptest-baseline.json
+```
+
+## Extended Checks (Layer 6)
+
+Layer 6 provides six additional validation rules that go beyond static and dependency analysis. Enable with `--extended-checks`.
+
+| Rule | ID | Severity | Description |
+|------|----|----------|-------------|
+| Env Matrix | L6-ENV-01 | WARNING / CRITICAL | Structural or security-sensitive divergence across EnvironmentConfigs |
+| SG Reachability | L6-NET-01 | CRITICAL / WARNING | SecurityGroup ingress CIDRs do not cover VPC subnet CIDRs |
+| Multi-Render | L6-MRC-01 | CRITICAL / WARNING | Resources disappear or count shrinks across render cycles |
+| Deletion Policy | L6-DEL-01 | WARNING | Resource deletionPolicy does not match XR deletionPolicy |
+| Tag Propagation | L6-TAG-01 | WARNING | Missing mandatory tags on AWS resources with forProvider |
+| Cross-Composition | L6-XCC-01 | WARNING | providerConfigRef not found in EnvironmentConfig known configs |
+
+Use `--env-matrix` alongside `--extended-checks` to auto-discover envconfig files and validate across all environments.
 
 ## Layer Details
 
@@ -366,6 +418,7 @@ xptest/
 │   ├── layer3/policy.py        # Layer 3: OPA subprocess, full-document evaluation
 │   ├── layer4/reporting.py     # Layer 4: JSON output, exit codes
 │   ├── validation/facade.py    # Unified L1-L3 orchestrator
+│   ├── layer5_rules.py         # Layer 6: Extended validation rules (6 rules)
 │   ├── drift/                  # Stage 3: AWS drift detection
 │   │   ├── aws_checker.py      # Per-family AWS API queries (VPC, S3, RDS, IAM)
 │   │   ├── comparator.py       # Field-level desired vs observed diff
@@ -398,7 +451,10 @@ xptest/
 │   ├── main.go
 │   ├── go.mod
 │   └── bin/template-coverage   # Pre-compiled binary
-├── tests/                      # 137 tests (130 pass, 7 skip without OPA)
+├── tests/                      # ~350 tests
+│   ├── test_baseline.py        # Baseline/suppression tests (7 tests)
+│   ├── test_extended_rules.py  # Extended validation rule tests (23 tests)
+│   └── ...                     # Existing test modules
 ├── docs/iam-policy.json        # Reference IAM policy for drift detection
 ├── .github/workflows/          # CI/CD workflow files
 ├── pyproject.toml
@@ -428,12 +484,13 @@ go build -o bin/template-coverage .
 ## Test Results
 
 ```
-137 collected, 130 passed, 7 skipped
+~350 collected, ~343 passed, 7 skipped
 
 Skipped: 7 OPA integration tests (require OPA binary on PATH)
 
 Layer 2 evaluation: TP=7, FP=0, FN=0 — Recall=100%, Precision=100%
 Layer 3 evaluation: requires OPA installation
+Layer 6 extended checks: 23 tests covering all 6 rules
 ```
 
 ## Writing Custom OPA Rules

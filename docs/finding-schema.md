@@ -20,7 +20,7 @@ Every finding is a JSON object with these fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `layer` | integer | Validation layer that produced the finding (1-4, or 7 for exploration) |
+| `layer` | integer | Validation layer that produced the finding (1-4, 6 for extended checks, or 7 for exploration) |
 | `rule` | string | Unique rule identifier (e.g., `L1-01/schema`, `enc/s3-sse`, `bc/resource-removed`) |
 | `resource` | string | Name of the composed resource, or `""` for composition-level findings |
 | `path` | string | Dot-path to the offending field (e.g., `spec.forProvider.encryption`) |
@@ -133,6 +133,17 @@ Override with `--output <path>`.
 | `inv/type-coverage` | Declared GVK absent from all renders | CRITICAL |
 | `inv/deletion-policy-escalation` | Orphan to Delete escalation detected across renders | CRITICAL |
 | `inv/minimum-resource-count` | Non-fault render produces fewer resources than baseline | WARNING |
+
+### Layer 6 — Extended Checks
+
+| Rule ID | Description | Default severity |
+|---------|-------------|-----------------|
+| `L6-ENV-01` | Structural or security-sensitive divergence across EnvironmentConfigs | WARNING / CRITICAL |
+| `L6-NET-01` | SecurityGroup ingress CIDRs do not cover VPC subnet CIDRs | CRITICAL (WARNING if addDefaultIPRanges) |
+| `L6-MRC-01` | Resources disappeared or count shrank across render cycles | CRITICAL / WARNING |
+| `L6-DEL-01` | Resource deletionPolicy does not match XR deletionPolicy | WARNING |
+| `L6-TAG-01` | Missing mandatory tags on AWS resources with forProvider | WARNING |
+| `L6-XCC-01` | providerConfigRef not found in EnvironmentConfig known configs | WARNING |
 
 ### Offline Analysis (Logic + Chaos)
 
