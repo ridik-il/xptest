@@ -184,6 +184,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "(default: auto)"
         ),
     )
+    val.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="Save current findings as a baseline for future suppression.",
+    )
+    val.add_argument(
+        "--baseline",
+        default=None,
+        help="Path to baseline JSON for finding suppression (default: .xptest-baseline.json if it exists).",
+    )
     val.set_defaults(func=_cmd_validate)
 
     # --- drift ---
@@ -335,6 +345,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_DEFAULT_BASELINE = ".xptest-baseline.json"
+
+
+def _apply_baseline_hooks(
+    findings: list[Finding], args: argparse.Namespace, composition_name: str = ""
+) -> list[Finding]:
+    """Handle --save-baseline and --baseline for the validate subcommand."""
+    baseline_path = getattr(args, "baseline", None)
+    if baseline_path is None and Path(_DEFAULT_BASELINE).exists():
+        baseline_path = _DEFAULT_BASELINE
+
+    if getattr(args, "save_baseline", False):
+        save_path = baseline_path or _DEFAULT_BASELINE
+        layer4.save_baseline(findings, save_path, composition_name)
+        sys.stderr.write(f"xptest: baseline saved to {save_path} ({len(findings)} finding(s))\n")
+
+    if baseline_path:
+        findings, suppressed = layer4.filter_baseline(findings, baseline_path)
+        if suppressed:
+            sys.stderr.write(f"xptest: {suppressed} finding(s) suppressed by baseline\n")
+
+    return findings
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     try:
         cfg = load_config(args.config)
@@ -420,6 +454,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
     findings = _run_layers(obj, cfg, halt_on_critical=args.halt_on_critical)
     if not args.logic_test:
+        findings = _apply_baseline_hooks(findings, args, obj.composition_name)
         return layer4.write(findings, output_path=args.output)
 
     case_id = "input-0"
@@ -439,6 +474,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         artifact_root=args.snapshot_dir,
     )
     findings.extend(_tag_findings(logic_findings, case_id))
+    findings = _apply_baseline_hooks(findings, args, obj.composition_name)
     sections["critical_count"] = sum(1 for f in findings if f.severity == Severity.CRITICAL)
     return layer4.write_extended(findings, output_path=args.output, extra_sections=sections)
 
@@ -976,6 +1012,8 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
     )
 
     if not args.logic_test:
+        comp_name = comp_doc.get("metadata", {}).get("name", "")
+        all_findings = _apply_baseline_hooks(all_findings, args, comp_name)
         return layer4.write(all_findings, output_path=args.output)
 
     logic_findings, sections = _run_logic_phase(
@@ -987,6 +1025,8 @@ def _cmd_validate_auto_xr(args: argparse.Namespace, cfg) -> int:
         artifact_root=args.snapshot_dir,
     )
     all_findings.extend(logic_findings)
+    comp_name = comp_doc.get("metadata", {}).get("name", "")
+    all_findings = _apply_baseline_hooks(all_findings, args, comp_name)
     sections["critical_count"] = sum(1 for f in all_findings if f.severity == Severity.CRITICAL)
     sections["timings"] = timings
     return layer4.write_extended(all_findings, output_path=args.output, extra_sections=sections)

@@ -174,3 +174,70 @@ def _print_extended_summary(extra_sections: dict, stdout: TextIO, stderr: TextIO
                 f"  template_coverage={tc.get('coverage_pct', 0):.1f}% "
                 f"({tc.get('covered_branches', 0)}/{tc.get('total_branches', 0)} branches)\n"
             )
+
+
+# ---------------------------------------------------------------------------
+# Baseline / suppression helpers
+# ---------------------------------------------------------------------------
+
+import hashlib
+import re
+from datetime import datetime, timezone
+
+_BRACKET_PREFIX_RE = re.compile(r"^\[.*?\]\s*")
+
+
+def _normalize_resource(resource: str) -> str:
+    """Strip the ``[case-id] `` tag prefix so fingerprints are stable across runs."""
+    return _BRACKET_PREFIX_RE.sub("", resource)
+
+
+def _finding_fingerprint(f: Finding) -> str:
+    """Compute a stable SHA-256 fingerprint (16 hex chars) for a finding."""
+    normalized = _normalize_resource(f.resource)
+    key = f"{f.rule}|{normalized}|{f.path}|{f.message}"
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def filter_baseline(
+    findings: list[Finding], baseline_path: str
+) -> tuple[list[Finding], int]:
+    """Remove findings whose fingerprints appear in the baseline file.
+
+    Returns (new_findings, suppressed_count).
+    """
+    try:
+        data = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return findings, 0
+
+    known = set(data.get("fingerprints", {}).keys())
+    new = [f for f in findings if _finding_fingerprint(f) not in known]
+    return new, len(findings) - len(new)
+
+
+def save_baseline(
+    findings: list[Finding], baseline_path: str, composition_name: str = ""
+) -> None:
+    """Persist current findings as a baseline JSON file."""
+    now = datetime.now(timezone.utc).isoformat()
+    fingerprints: dict[str, dict] = {}
+    for f in findings:
+        fp = _finding_fingerprint(f)
+        if fp not in fingerprints:
+            fingerprints[fp] = {
+                "rule": f.rule,
+                "resource": _normalize_resource(f.resource),
+                "message": f.message,
+                "suppressed_at": now,
+            }
+    payload = {
+        "version": 1,
+        "composition": composition_name,
+        "fingerprints": fingerprints,
+    }
+    p = Path(baseline_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
