@@ -560,9 +560,7 @@ def check_cross_composition(
         # Pattern match: e.g. providerconfig-aws-demo matches providerconfig-aws*
         for pat in patterns:
             if fnmatch(name, pat):
-                # Also check that at least one known config matches the same pattern
-                if any(fnmatch(k, pat) for k in known_configs):
-                    return True
+                return True
         return False
 
     for res in rendered_resources:

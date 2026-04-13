@@ -1,0 +1,15 @@
+rules_path: ./rules/aws
+crd_bundle_path: ./schemas/sample-bundle
+
+# L6-TAG-01: Object kind has spec.forProvider.manifest, not tags.
+# Values replace defaults entirely, so original defaults are repeated here.
+tag_exempt_kinds:
+  - DBClusterParameterGroup
+  - DBParameterGroup
+  - Object
+
+# L6-XCC-01: Object uses providerconfig-k8s, not providerconfig-aws.
+# Values replace defaults entirely, so the original default is repeated here.
+known_provider_config_patterns:
+  - "providerconfig-aws*"
+  - "providerconfig-k8s*"
