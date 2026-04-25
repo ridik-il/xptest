@@ -10,6 +10,8 @@ Checks performed (no AWS credentials, no live cluster required):
          readinessCheck defined.
   L2-05  Cross-composition ordering: validate dependency manifest declaring
          explicit inter-composition edges (Decision 6).
+  L2-06  Ineffective readiness check: a readinessCheck uses a field path that
+         is always present (e.g. metadata.name), making the check a no-op.
 
 Edge-creating patch types (confirmed U3):
   - FromCompositeFieldPath   — when fromFieldPath starts with "status.atProvider."
@@ -48,6 +50,7 @@ def run(
     findings.extend(_check_dangling_references(candidate_refs, resource_names, obj))
     findings.extend(_check_cycles(resolved_edges, obj))
     findings.extend(_check_missing_readiness_gates(resolved_edges, obj))
+    findings.extend(_check_ineffective_readiness(obj))
     if obj.crd_bundle_path:
         findings.extend(_check_reference_completeness(obj, crd_cache))
     return findings
@@ -276,6 +279,61 @@ def _check_missing_readiness_gates(
                     ),
                 )
             )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# L2-06 — Ineffective readiness check (always-true field path)
+# ---------------------------------------------------------------------------
+
+# Field paths that are populated immediately on resource creation and therefore
+# do not indicate actual cloud-resource readiness.
+_ALWAYS_PRESENT_FIELDS = {
+    "metadata.name",
+    "metadata.uid",
+    "metadata.resourceVersion",
+    "metadata.creationTimestamp",
+    "metadata.generation",
+    "metadata.namespace",
+}
+
+
+def _check_ineffective_readiness(
+    obj: CompositionObject,
+) -> list[Finding]:
+    """Flag readiness checks that use always-present fields.
+
+    A NonEmpty check on ``metadata.name`` is effectively a no-op: the field is
+    populated the moment the Kubernetes object is created, long before the
+    cloud resource is actually provisioned.  Downstream consumers that depend
+    on ``status.atProvider.*`` fields will read empty values.
+    """
+    findings: list[Finding] = []
+    for res in obj.resources:
+        for rc in res.readiness_checks:
+            fp = rc.get("fieldPath", "")
+            if rc.get("type") == "NonEmpty" and fp in _ALWAYS_PRESENT_FIELDS:
+                findings.append(
+                    Finding(
+                        layer=2,
+                        rule="L2-06/ineffective-readiness-check",
+                        resource=res.name,
+                        path=f"readinessChecks[].fieldPath",
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Resource '{res.name}' has a readinessCheck on "
+                            f"'{fp}' which is always present on any Kubernetes "
+                            f"object. This check does not verify that the cloud "
+                            f"resource is actually provisioned."
+                        ),
+                        remediation=(
+                            f"Change the readinessCheck fieldPath to a field "
+                            f"that indicates actual readiness, such as "
+                            f"'status.atProvider.id' or "
+                            f"'status.atProvider.endpoint'."
+                        ),
+                    )
+                )
     return findings
 
 

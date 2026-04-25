@@ -350,6 +350,10 @@ _KNOWN_TEMPLATE_ROOTS = {
     "spec",
     "metadata",
     "status",
+    "context",
+    "resource",
+    "crossplane",
+    "providers",
 }
 
 # Sub-paths under observed.composite.resource that should exist

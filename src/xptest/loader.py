@@ -882,6 +882,8 @@ def _go_template_resource_name(
     doc_index: int,
 ) -> str:
     annotations = metadata.get("annotations", {})
+    if not isinstance(annotations, dict):
+        return f"go-template-step-{step_index}-doc-{doc_index}"
     ann_name = annotations.get("gotemplating.fn.crossplane.io/composition-resource-name")
     if isinstance(ann_name, str) and ann_name and "xptest-templated" not in ann_name:
         return ann_name
