@@ -233,8 +233,11 @@ def _generate_spec_defaults(
         elif prop_type == "boolean":
             defaults[name] = False
         elif prop_type == "array":
-            # Include empty array — templates must handle this
-            defaults[name] = []
+            items_schema = prop.get("items", {})
+            if items_schema.get("type") == "object" and items_schema.get("properties"):
+                defaults[name] = [_generate_spec_defaults(items_schema)]
+            else:
+                defaults[name] = []
         elif prop_type == "object":
             # Recurse into nested objects
             nested = _generate_spec_defaults(prop)
@@ -440,6 +443,31 @@ def auto_render_pipeline(
             raise RenderError("No pipeline steps found in composition")
         functions_yaml = yaml.dump_all(func_docs, default_flow_style=False)
 
+    try:
+        return render_composition(
+            composition_path=composition_path,
+            xr_yaml=xr_yaml,
+            functions_yaml=functions_yaml,
+            environment_config_paths=environment_config_paths,
+            observed_resources_path=observed_resources_path,
+            timeout=timeout,
+        )
+    except RenderError:
+        # Retry with empty arrays — some compositions reject stub array
+        # elements due to mutual-exclusivity constraints in templates.
+        stripped = _strip_array_stubs(xr_doc)
+        if stripped != xr_doc:
+            stripped_yaml = yaml.dump(stripped, default_flow_style=False)
+            return render_composition(
+                composition_path=composition_path,
+                xr_yaml=stripped_yaml,
+                functions_yaml=functions_yaml,
+                environment_config_paths=environment_config_paths,
+                observed_resources_path=observed_resources_path,
+                timeout=timeout,
+            )
+        raise
+
     return render_composition(
         composition_path=composition_path,
         xr_yaml=xr_yaml,
@@ -448,6 +476,15 @@ def auto_render_pipeline(
         observed_resources_path=observed_resources_path,
         timeout=timeout,
     )
+
+
+def _strip_array_stubs(obj: Any) -> Any:
+    """Replace single-element stub arrays with empty arrays for retry."""
+    if isinstance(obj, dict):
+        return {k: _strip_array_stubs(v) for k, v in obj.items()}
+    if isinstance(obj, list) and len(obj) == 1 and isinstance(obj[0], dict):
+        return []
+    return obj
 
 
 def _read_yaml_doc(path: str) -> dict[str, Any]:
