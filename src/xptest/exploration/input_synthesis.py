@@ -29,12 +29,19 @@ def generate_seed_suite(
     if not versions:
         return []
 
-    version = versions[0].get("name", "v1alpha1")
+    # Prefer the referenceable version (used by compositions) over the first
+    target_version = versions[0]
+    for v in versions:
+        if v.get("referenceable"):
+            target_version = v
+            break
+
+    version = target_version.get("name", "v1alpha1")
     kind = xr_kind_override or spec.get("names", {}).get("kind", "Composite")
     api_version = f"{group}/{version}" if group else version
 
     schema = (
-        versions[0]
+        target_version
         .get("schema", {})
         .get("openAPIV3Schema", {})
         .get("properties", {})
@@ -54,7 +61,10 @@ def generate_seed_suite(
             "kind": kind,
             "metadata": {
                 "name": name,
-                "labels": {"crossplane.io/claim-name": name},
+                "labels": {
+                    "crossplane.io/claim-name": name,
+                    "crossplane.io/claim-namespace": "default",
+                },
             },
             "spec": combo,
         }
@@ -102,7 +112,10 @@ def extend_suite(
             "kind": kind,
             "metadata": {
                 "name": name,
-                "labels": {"crossplane.io/claim-name": name},
+                "labels": {
+                    "crossplane.io/claim-name": name,
+                    "crossplane.io/claim-namespace": "default",
+                },
             },
             "spec": mutated_spec,
         }
@@ -182,9 +195,111 @@ def _enumerate_domain(field_name: str, schema: dict[str, Any]) -> list[Any]:
         return [[], [{}]]
 
     if field_type == "object":
-        return [{}]
+        return _structural_object_variants(schema)
 
     return ["sample"]
+
+
+def _structural_object_variants(
+    schema: dict[str, Any],
+    max_variants: int = 32,
+) -> list[dict[str, Any]]:
+    """Generate structural variants for an object field.
+
+    For each optional sub-property that is itself an object, boolean, or enum,
+    produce variants with that sub-property present (minimal valid value) or
+    absent.  This exercises ``{{- if}}`` / ``{{- with}}`` branches in
+    go-template compositions.
+    """
+    props: dict[str, Any] = schema.get("properties", {})
+    required: list[str] = schema.get("required", [])
+
+    if not props:
+        return [{}]
+
+    # Build the base object from required fields only
+    base: dict[str, Any] = {}
+    for name in required:
+        if name in props:
+            base[name] = _minimal_value(name, props[name])
+
+    # Identify optional sub-fields that can be toggled
+    toggleable: list[tuple[str, Any]] = []
+    for name, sub_schema in props.items():
+        if name in required:
+            continue
+        sub_type = sub_schema.get("type", "string")
+        if sub_type == "object" and sub_schema.get("properties"):
+            toggleable.append((name, _minimal_value(name, sub_schema)))
+        elif sub_type == "array":
+            toggleable.append((name, _minimal_value(name, sub_schema)))
+        elif sub_type == "boolean":
+            toggleable.append((name, True))
+        elif sub_schema.get("enum"):
+            toggleable.append((name, sub_schema["enum"][0]))
+
+    if not toggleable:
+        return [base] if base else [{}]
+
+    # Generate variants: base alone + base with each individual toggle +
+    # base with all toggles.  For N toggleable fields this gives N+2
+    # variants which is enough to exercise each conditional independently.
+    variants: list[dict[str, Any]] = [dict(base)]  # bare minimum
+
+    for name, val in toggleable:
+        variant = dict(base)
+        variant[name] = val
+        variants.append(variant)
+        if len(variants) >= max_variants:
+            break
+
+    # All-toggles-on variant
+    if len(toggleable) > 1 and len(variants) < max_variants:
+        all_on = dict(base)
+        for name, val in toggleable:
+            all_on[name] = val
+        variants.append(all_on)
+
+    return variants
+
+
+def _minimal_value(field_name: str, schema: dict[str, Any]) -> Any:
+    """Produce a minimal valid value for a schema node."""
+    enum_vals = schema.get("enum")
+    if isinstance(enum_vals, list) and enum_vals:
+        return enum_vals[0]
+
+    field_type = schema.get("type", "string")
+
+    if field_type == "boolean":
+        return True
+
+    if field_type in {"integer", "number"}:
+        return schema.get("minimum", 1)
+
+    if field_type == "string":
+        return "sample"
+
+    if field_type == "array":
+        items = schema.get("items", {})
+        item_val = _minimal_value("item", items)
+        return [item_val]
+
+    if field_type == "object":
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+        obj: dict[str, Any] = {}
+        # Fill required fields; if none, fill first property for non-empty object
+        if required:
+            for name in required:
+                if name in props:
+                    obj[name] = _minimal_value(name, props[name])
+        elif props:
+            first_name = next(iter(props))
+            obj[first_name] = _minimal_value(first_name, props[first_name])
+        return obj
+
+    return "sample"
 
 
 def _pairwise_cover(
@@ -291,9 +406,9 @@ def _count_covered(
 
 def _hashable(value: Any) -> Any:
     if isinstance(value, list):
-        return tuple(value)
+        return tuple(_hashable(v) for v in value)
     if isinstance(value, dict):
-        return tuple(sorted(value.items()))
+        return tuple(sorted((k, _hashable(v)) for k, v in value.items()))
     return value
 
 

@@ -2277,6 +2277,12 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     # Load CRD bundle once for all compositions
     crd_cache = load_crd_bundle(cfg.crd_bundle_path)
 
+    # Register XRD-defined composite types so L1-04 does not flag them
+    if crd_cache is not None:
+        from xptest.cache import augment_with_xrds
+
+        augment_with_xrds(crd_cache, args.root)
+
     # Validate each composition
     progress.phase(f"Validating {len(result.entries)} composition(s)")
     composition_reports: list[dict[str, Any]] = []

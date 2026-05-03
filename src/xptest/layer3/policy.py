@@ -7,9 +7,13 @@ cross-resource rules can correlate fields across multiple resources.
 Checks (from framework-design.md §3.3):
   Encryption:     enc/s3-sse, enc/rds-encrypted
   Network:        net/sg-no-open-ssh, net/sg-no-open-db, net/rds-not-public, net/s3-public-block
-  IAM:            iam/no-wildcard-action, iam/no-wildcard-resource, iam/trust-service-match
+  IAM:            iam/no-wildcard-action, iam/no-wildcard-resource, iam/trust-service-match,
+                  iam/no-wildcard-principal
   Cross-resource: cross/kms-key-consistency, cross/iam-rds-trust, cross/sg-rds-port-match
   Tagging:        tag/mandatory-keys
+  S3:             s3/versioning-enabled
+  EC2:            ec2/no-public-ip
+  KMS:            kms/key-rotation-enabled
 
 Requires: OPA binary on PATH or configured via opa_binary in xptest.yaml.
 No AWS credentials.  No live cluster.
@@ -34,6 +38,9 @@ _RULE_PACKAGES = [
     "xptest.iam",
     "xptest.cross_resource",
     "xptest.tagging",
+    "xptest.s3",
+    "xptest.ec2",
+    "xptest.kms",
 ]
 
 

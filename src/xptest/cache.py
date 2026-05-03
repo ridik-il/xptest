@@ -101,3 +101,46 @@ def load_crd_bundle(bundle_path: str) -> CrdBundleCache | None:
         atprovider_schemas=atprovider_schemas,
         bundle_path=bundle_path,
     )
+
+
+def augment_with_xrds(cache: CrdBundleCache, package_root: str) -> None:
+    """Scan *package_root* for XRD files and register their composite types.
+
+    For each ``CompositeResourceDefinition`` found, the declared kind and
+    group are added to ``cache.known_kinds`` and the openAPIV3Schema (if
+    present) is added to ``cache.crd_schemas``.  This eliminates L1-04
+    false positives for internal composite resource types defined by XRDs.
+
+    Mutates *cache* in place.
+    """
+    root = Path(package_root)
+    if not root.is_dir():
+        return
+
+    for yaml_file in root.rglob("*.yaml"):
+        try:
+            with yaml_file.open() as fh:
+                doc = yaml.safe_load(fh)
+            if not isinstance(doc, dict) or doc.get("kind") != "CompositeResourceDefinition":
+                continue
+
+            spec = doc.get("spec", {})
+            group: str = spec.get("group", "")
+            kind: str = spec.get("names", {}).get("kind", "")
+            if not group or not kind:
+                continue
+
+            for v in spec.get("versions", []):
+                v_name: str = v.get("name", "")
+                if not v_name:
+                    continue
+
+                api_version = f"{group}/{v_name}"
+                key = (api_version, kind)
+                cache.known_kinds.add(key)
+
+                schema_block = v.get("schema", {}).get("openAPIV3Schema", {})
+                if schema_block:
+                    cache.crd_schemas[key] = schema_block
+        except Exception:  # noqa: BLE001
+            continue
