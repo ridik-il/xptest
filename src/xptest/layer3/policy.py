@@ -261,8 +261,15 @@ def _run_opa_combined_query(
         return None
 
     # Combined query returns: {"result": [{"expressions": [{"value": [[...], [...], ...]}]}]}
+    # If any referenced package is undefined (e.g. a rule file is absent from this
+    # rule set), OPA makes the whole array undefined and returns no result rows.
+    # Signal failure with None so the caller falls back to per-package queries,
+    # which evaluate each package independently and skip the undefined ones.
+    results = output.get("result")
+    if not results:
+        return None
     violations: list[dict[str, Any]] = []
-    for r in output.get("result", []):
+    for r in results:
         for expr in r.get("expressions", []):
             violations.extend(_normalize_opa_value(expr.get("value")))
     return violations
