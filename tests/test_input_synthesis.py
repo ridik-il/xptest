@@ -194,9 +194,7 @@ def test_structural_object_variants_with_sub_objects():
     # At least one variant has lifecycleConfiguration
     assert any("lifecycleConfiguration" in v for v in variants)
     # All-on variant has both
-    assert any(
-        "corsConfiguration" in v and "lifecycleConfiguration" in v for v in variants
-    )
+    assert any("corsConfiguration" in v and "lifecycleConfiguration" in v for v in variants)
 
 
 def test_structural_object_variants_with_required():

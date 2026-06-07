@@ -41,8 +41,7 @@ def generate_seed_suite(
     api_version = f"{group}/{version}" if group else version
 
     schema = (
-        target_version
-        .get("schema", {})
+        target_version.get("schema", {})
         .get("openAPIV3Schema", {})
         .get("properties", {})
         .get("spec", {})

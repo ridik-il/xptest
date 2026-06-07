@@ -318,7 +318,7 @@ def _check_ineffective_readiness(
                         layer=2,
                         rule="L2-06/ineffective-readiness-check",
                         resource=res.name,
-                        path=f"readinessChecks[].fieldPath",
+                        path="readinessChecks[].fieldPath",
                         severity=Severity.WARNING,
                         message=(
                             f"Resource '{res.name}' has a readinessCheck on "
@@ -327,10 +327,10 @@ def _check_ineffective_readiness(
                             f"resource is actually provisioned."
                         ),
                         remediation=(
-                            f"Change the readinessCheck fieldPath to a field "
-                            f"that indicates actual readiness, such as "
-                            f"'status.atProvider.id' or "
-                            f"'status.atProvider.endpoint'."
+                            "Change the readinessCheck fieldPath to a field "
+                            "that indicates actual readiness, such as "
+                            "'status.atProvider.id' or "
+                            "'status.atProvider.endpoint'."
                         ),
                     )
                 )
